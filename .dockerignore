@@ -1,0 +1,9 @@
+.git/
+.venv/
+.state/
+data/
+.secrets/
+contexto/
+__pycache__/
+*.pyc
+.env

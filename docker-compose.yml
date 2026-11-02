@@ -1,0 +1,58 @@
+# Uma instancia por persona/contexto. A mesma imagem serve todas: o que muda e o
+# `environment` (config) + `env_file` (segredos) + `volumes` (contexto e dados).
+#
+# Segredos: `OPENROUTER_API_KEY` vem de ./.secrets/openrouter.env; o token do bot,
+# de ./.secrets/<persona>/telegram.env (um bot/token por persona no BotFather).
+# A chave da OpenRouter e compartilhada.
+#
+# Subir tudo:  docker compose up -d --build
+# Subir um:    docker compose up -d --build bukowski
+
+name: persona-bots
+
+x-persona: &persona
+  build: .
+  image: persona-bot:latest
+  restart: unless-stopped
+  user: "1000:1000"
+
+services:
+  bukowski:
+    <<: *persona
+    container_name: persona-bukowski
+    env_file:
+      - ./.secrets/openrouter.env
+      - ./.secrets/bukowski/telegram.env
+    environment:
+      AGENT: bukowski
+      RAG_ENABLED: "true"
+      RETRIEVAL: hybrid
+      CONTEXT_DIR: contexto/bukowski
+      STATE_DIR: /app/.state
+      INDEX_ON_START: "true"
+      HOME: /models
+      FASTEMBED_CACHE_PATH: /models
+    volumes:
+      - ./contexto/bukowski:/app/contexto/bukowski:ro
+      - ./data/bukowski:/app/.state
+      - model-cache:/models
+
+  buda:
+    <<: *persona
+    container_name: persona-buda
+    env_file:
+      - ./.secrets/openrouter.env
+      - ./.secrets/buda/telegram.env
+    environment:
+      AGENT: buda
+      RAG_ENABLED: "false"
+      STATE_DIR: /app/.state
+      HOME: /models
+      FASTEMBED_CACHE_PATH: /models
+    volumes:
+      - ./data/buda:/app/.state
+      - model-cache:/models
+
+volumes:
+  model-cache:
+    name: persona-bots_model-cache

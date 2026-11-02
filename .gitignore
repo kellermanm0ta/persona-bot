@@ -1,10 +1,11 @@
-.state/
+data/
 .venv/
 .secrets/*
 !.secrets/*.example
 __pycache__/
 *.pyc
 contexto/
+.env
 
 # caches / editores
 *.egg-info/

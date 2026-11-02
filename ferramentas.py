@@ -6,22 +6,17 @@ e busca em memoria (Python puro, sem dependencias externas).
 """
 import json
 import math
-import os
 import re
 import unicodedata
-from pathlib import Path
 
+import config
 import logsetup
 
-BASE = Path(__file__).resolve().parent
-CORPUS = BASE / ".state" / "corpus.json"
-EMB_PATH = BASE / ".state" / "embeddings.npy"
-EMB_META = BASE / ".state" / "index_meta.json"
+CORPUS = config.STATE_DIR / "corpus.json"
+EMB_PATH = config.STATE_DIR / "embeddings.npy"
+EMB_META = config.STATE_DIR / "index_meta.json"
 
-EMBED_MODEL = os.environ.get(
-    "BUKOWSKI_EMBED_MODEL",
-    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-).strip()
+EMBED_MODEL = config.EMBED_MODEL
 
 log = logsetup.get_logger("ferramentas")
 
@@ -123,7 +118,7 @@ def load_corpus() -> dict:
     return data
 
 
-def listar_obras() -> list[dict]:
+def listar_contexto() -> list[dict]:
     data = load_corpus()
     return data.get("livros", [])
 
@@ -285,14 +280,18 @@ def buscar_hibrido(consulta: str, limite: int = 4, k_bm25: int = 20) -> list[dic
 # Tool do agente
 # ---------------------------------------------------------------------------
 
-def consultar_obras(args, context=None) -> str:
-    """Busca trechos nas obras de Bukowski para embasar a resposta."""
+def consultar_contexto(args, context=None) -> str:
+    """Busca trechos no contexto indexado para embasar a resposta."""
     args = args or {}
     consulta = (args.get("consulta") or "").strip()
     if not consulta:
         return json.dumps({"erro": "informe consulta"})
-    trechos = buscar_hibrido(consulta, limite=int(args.get("limite") or 4))
-    log.info("consultar_obras(%r) -> %d trechos", consulta, len(trechos))
+    limite = int(args.get("limite") or 4)
+    if config.RETRIEVAL == "bm25":
+        trechos = buscar(consulta, limite)
+    else:
+        trechos = buscar_hibrido(consulta, limite)
+    log.info("consultar_contexto(%r) -> %d trechos", consulta, len(trechos))
     if not trechos:
         return json.dumps(
             {"consulta": consulta, "trechos": [], "aviso": "nada relevante encontrado"}
@@ -303,4 +302,4 @@ def consultar_obras(args, context=None) -> str:
 if __name__ == "__main__":
     import sys
 
-    print(consultar_obras({"consulta": " ".join(sys.argv[1:])}))
+    print(consultar_contexto({"consulta": " ".join(sys.argv[1:])}))

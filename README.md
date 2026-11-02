@@ -1,68 +1,80 @@
 # persona-bot
 
-Bot de Telegram que conversa **em personagem como Charles Bukowski**, em pt-BR,
-fundamentado em duas obras (*Misto Quente* e *Mulheres*) via RAG híbrido. Roda
-nativo no host (sem Docker, sem opencode em runtime), em Python.
+Bot de Telegram **genérico** que conversa em personagem, em pt-BR, opcionalmente
+fundamentado num contexto (PDFs) via **RAG híbrido** (BM25 + embeddings locais).
+Cada instância roda **uma persona**; o que muda entre elas é a configuração —
+ninguém precisa mexer no código: troca-se o prompt em `.opencode/agent/<persona>.md`
+e a config no `docker-compose.yml`.
 
-## Arquitetura
+## Como funciona
 
 ```
-telegram_bot.py  ->  runtime.py  ->  OpenRouter (openrouter-agent-sdk)
-                        |                tool: consultar_obras
-                        v
-                   ferramentas.py  (BM25 + vetores locais, fusão RRF)
-                        ^
-                   indexar.py  (pdftotext + fastembed)  <-  contexto/*.pdf
+telegram_bot.py -> runtime.py -> OpenRouter (openrouter-agent-sdk)
+                       |               tool: consultar_contexto (se RAG_ENABLED)
+                       v
+                  ferramentas.py  (BM25 + vetores locais, fusão RRF)
+                       ^
+                  indexar.py  (pdftotext + fastembed)  <-  CONTEXT_DIR/*.pdf
 ```
 
-- `runtime.py` lê a persona de `.opencode/agent/bukowski.md` e chama a OpenRouter.
-- `ferramentas.py` expõe a única tool do agente, `consultar_obras`, com busca
-  híbrida: BM25 (Python puro) + similaridade semântica (embeddings ONNX locais,
-  via `fastembed`), combinadas por RRF; cai no BM25 puro se não houver vetores.
-- `indexar.py` extrai os PDFs, limpa boilerplate, gera o índice BM25
-  (`.state/corpus.json`) e os embeddings (`.state/embeddings.npy`).
+- `config.py` lê tudo do ambiente (`AGENT`, `RAG_ENABLED`, `CONTEXT_DIR`, …).
+- Se `RAG_ENABLED=false`, o bot é só persona (sem corpus, sem tool).
+- `indexar.py` gera o índice BM25 e os embeddings a partir dos PDFs de `CONTEXT_DIR`.
 
-## Setup
+## Layout
 
-Requer `pdftotext` (poppler-utils) no PATH.
+```
+.opencode/agent/<persona>.md     a persona (fonte da verdade); `bot_name:` opcional
+contexto/<persona>/*.pdf         contexto opcional; `titulos.json` mapeia arquivo -> titulo
+.secrets/openrouter.env          chave da OpenRouter (compartilhada)
+.secrets/<persona>/telegram.env  token do bot (um por persona)
+data/<persona>/                  estado: sessions, log, corpus, embeddings
+```
+
+## Adicionar uma persona
+
+1. `.opencode/agent/<persona>.md` (copie o molde de `buda.md`/`bukowski.md`; ajuste o
+   `model:` e opcionalmente `bot_name:`).
+2. (Opcional) PDFs em `contexto/<persona>/` + `contexto/<persona>/titulos.json`.
+3. `.secrets/<persona>/telegram.env` com o token do bot (BotFather).
+4. Um serviço no `docker-compose.yml` (copie o bloco `bukowski` e ajuste `AGENT`,
+   `RAG_ENABLED`, `CONTEXT_DIR` e os volumes).
+
+## Rodar com Docker (recomendado)
+
+```bash
+cp .secrets/openrouter.env.example .secrets/openrouter.env   # OPENROUTER_API_KEY
+cp .secrets/telegram.env.example .secrets/<persona>/telegram.env
+chmod 600 .secrets/openrouter.env .secrets/<persona>/telegram.env
+
+docker compose up -d --build
+docker compose logs -f bukowski
+```
+
+Na primeira subida de uma persona com RAG, o container baixa o modelo de embeddings
+(~0,2 GB) e indexa o contexto; depois reaproveita `data/<persona>` e o cache.
+
+## Rodar no host (sem Docker)
+
+Requer `pdftotext` (poppler-utils) e a venv dedicada.
 
 ```bash
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements-bot.txt
-
-# segredos
-cp .secrets/openrouter.env.example .secrets/openrouter.env   # preencha OPENROUTER_API_KEY
-cp .secrets/telegram.env.example .secrets/telegram.env       # preencha TELEGRAM_BOT_TOKEN
-chmod 600 .secrets/*.env
-
-# coloque as obras (PDF com camada de texto) em contexto/ e indexe
-./.venv/bin/python indexar.py
-```
-
-A primeira indexação baixa o modelo de embeddings (~0,2 GB). Troque de modelo com
-`BUKOWSKI_EMBED_MODEL`.
-
-## Rodar
-
-```bash
+./.venv/bin/python indexar.py            # só se RAG_ENABLED
 nohup ./run_bot.sh >/dev/null 2>&1 </dev/null &
-kill "$(cat .state/bot.pid)"     # parar (pode levar ~25 s)
+kill "$(cat data/<AGENT>/bot.pid)"       # parar (~25 s)
 ```
 
-Comandos no chat: `/start`, `/help`, `/limpar`, `/obras`, `/id`.
-Logs em `.state/bot.log`.
+Comandos no chat: `/start`, `/help`, `/limpar`, `/id` e `/contexto` (só com RAG).
 
-## Verificação (sem test suite)
+## Configuração (environment)
 
-```bash
-./.venv/bin/python indexar.py
-./.venv/bin/python ferramentas.py "corrida de cavalos"
-./.venv/bin/python runtime.py "E aí, velho. O que você faria?"
-```
-
-Detalhes de operação e armadilhas em `AGENTS.md`.
+`AGENT`, `RAG_ENABLED`, `CONTEXT_DIR`, `STATE_DIR`, `RETRIEVAL` (`hybrid`|`bm25`),
+`EMBED_MODEL`, `OPENROUTER_MODEL`, `MAX_HISTORY`, `INDEX_ON_START` — detalhes e defaults
+em `AGENTS.md`.
 
 ## Aviso
 
-As obras em `contexto/` têm **direitos autorais** e **não** são versionadas
-(`.gitignore`). Nunca comite os PDFs nem um `.state/corpus.json` pré-construído.
+Os PDFs em `contexto/` têm **direitos autorais** e **não** são versionados. Nunca
+comite os PDFs nem um `corpus.json`/`embeddings.npy` pré-construído (contêm trechos).

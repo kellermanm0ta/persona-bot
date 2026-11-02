@@ -12,16 +12,15 @@ import signal
 import sys
 import threading
 import time
-from pathlib import Path
 
 import requests
 
+import config
 import logsetup
 import runtime
 
 log = logsetup.get_logger("bot").info
 
-BASE = Path(__file__).resolve().parent
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 ALLOWED = {
     int(x)
@@ -31,23 +30,25 @@ ALLOWED = {
 LONG_POLL = 25
 API = f"https://api.telegram.org/bot{TOKEN}"
 
-STATE_DIR = BASE / ".state"
+STATE_DIR = config.STATE_DIR
 STATE_FILE = STATE_DIR / "sessions.json"
-MAX_HISTORY = 12
+MAX_HISTORY = config.MAX_HISTORY
 
 _running = True
 _state_lock = threading.Lock()
 _sessions: dict = {}
 _busy: set = set()
 
-HELP = (
-    "Sou o Bukowski. Senta e fala.\n\n"
-    "Manda o que quiser — eu respondo como eu responderia.\n"
-    "Comandos:\n"
-    "  /limpar  - esquece a conversa.\n"
-    "  /obras   - lista os livros que carrego na memoria.\n"
-    "  /id      - mostra seu user id."
-)
+
+def build_help() -> str:
+    cmds = ["  /limpar   - esquece a conversa."]
+    if config.RAG_ENABLED:
+        cmds.append("  /contexto - lista as fontes indexadas.")
+    cmds.append("  /id       - mostra seu user id.")
+    return f"Sou {runtime.bot_name()}. Manda o que quiser.\n\n" + "\n".join(cmds)
+
+
+HELP = build_help()
 
 
 def api(method, **params):
@@ -155,7 +156,7 @@ def responder_worker(chat_id, texto, message_id):
         resposta = (resposta or "").strip() or "..."
     except Exception as e:
         log(f"resposta erro: {e!r}")
-        send(chat_id, f"Deu merda aqui: {e}", reply_to=message_id)
+        send(chat_id, f"Tive um problema ao responder: {e}", reply_to=message_id)
         _busy.discard(chat_id)
         return
     add_turn(chat_id, "user", texto)
@@ -181,15 +182,15 @@ def handle_message(msg):
         return
     if text == "/limpar":
         clear_history(chat_id)
-        send(chat_id, "Esqueci tudo. Comeca de novo.", reply_to=msg["message_id"])
+        send(chat_id, "Historico apagado. Comeca de novo.", reply_to=msg["message_id"])
         return
-    if text == "/obras":
-        obras = runtime.ferramentas.listar_obras()
-        if not obras:
-            send(chat_id, "Nenhuma obra indexada ainda.", reply_to=msg["message_id"])
+    if text == "/contexto" and config.RAG_ENABLED:
+        fontes = runtime.ferramentas.listar_contexto()
+        if not fontes:
+            send(chat_id, "Nenhuma fonte indexada ainda.", reply_to=msg["message_id"])
             return
-        linhas = "\n".join(f"- {o['nome']} ({o['arquivo']})" for o in obras)
-        send(chat_id, f"Na memoria:\n{linhas}", reply_to=msg["message_id"])
+        linhas = "\n".join(f"- {o['nome']} ({o['arquivo']})" for o in fontes)
+        send(chat_id, f"Fontes indexadas:\n{linhas}", reply_to=msg["message_id"])
         return
     if not text:
         return
@@ -197,7 +198,7 @@ def handle_message(msg):
         return
 
     if chat_id in _busy:
-        send(chat_id, "Calma. Tô terminando de beber aqui.", reply_to=msg["message_id"])
+        send(chat_id, "Ainda estou respondendo a mensagem anterior.", reply_to=msg["message_id"])
         return
 
     threading.Thread(
@@ -219,8 +220,18 @@ def main():
     load_state()
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    obras = ", ".join(o["nome"] for o in runtime.ferramentas.listar_obras()) or "(sem corpus)"
-    log(f"bukowski-bot iniciado (modelo={runtime.model_for('bukowski')}; obras={obras})")
+    modelo = runtime.model_for(config.AGENT)
+    if config.RAG_ENABLED:
+        fontes = ", ".join(o["nome"] for o in runtime.ferramentas.listar_contexto()) or "(sem indice)"
+        log(
+            f"{runtime.bot_name()} iniciado (agente={config.AGENT} modelo={modelo} "
+            f"rag={config.RETRIEVAL} fontes={fontes})"
+        )
+    else:
+        log(
+            f"{runtime.bot_name()} iniciado (agente={config.AGENT} modelo={modelo} "
+            f"rag=off)"
+        )
 
     offset = 0
     while _running:

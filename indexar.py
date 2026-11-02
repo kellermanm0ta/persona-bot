@@ -1,41 +1,43 @@
 #!/usr/bin/env python3
-"""Indexa os PDFs de contexto/ num corpus BM25 em .state/corpus.json.
+"""Indexa os PDFs de CONTEXT_DIR num corpus BM25 + embeddings em STATE_DIR.
 
 Uso:
     ./.venv/bin/python indexar.py
 
 Extrai o texto (pdftotext), limpa o boilerplate, quebra em trechos por paragrafo
-e grava o indice invertido usado por ferramentas.consultar_obras. Rode novamente
-sempre que adicionar/trocar PDFs em contexto/.
+e grava o indice usado por ferramentas.consultar_contexto. Rode novamente sempre
+que adicionar/trocar PDFs. CONTEXT_DIR (default: contexto/<AGENT>) e STATE_DIR
+(default: .state) vem do ambiente; um `titulos.json` opcional em CONTEXT_DIR mapeia
+arquivo -> titulo bonito (senao usa o nome do arquivo).
 """
 import json
 import subprocess
 import sys
 from pathlib import Path
 
+import config
 import ferramentas
 import logsetup
 
-BASE = Path(__file__).resolve().parent
-CONTEXTO = BASE / "contexto"
-OUT = BASE / ".state" / "corpus.json"
+CONTEXT_DIR = config.CONTEXT_DIR
+OUT = config.STATE_DIR / "corpus.json"
 
 log = logsetup.get_logger("indexar")
 
 MAX_CHARS = 900
 
-TITULOS = {
-    "mistoquente": "Misto Quente",
-    "mulheres": "Mulheres",
-}
+
+def load_titulos() -> dict:
+    path = CONTEXT_DIR / "titulos.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 
-def titulo_de(nome: str) -> str:
-    low = nome.lower()
-    for chave, titulo in TITULOS.items():
-        if chave in low:
-            return titulo
-    return Path(nome).stem
+def titulo_de(nome: str, mapa: dict) -> str:
+    stem = Path(nome).stem
+    return mapa.get(nome) or mapa.get(stem) or stem
 
 
 def extrair(pdf: Path) -> str:
@@ -88,15 +90,16 @@ def chunks_de(texto: str, livro: str):
 
 
 def build():
-    pdfs = sorted(CONTEXTO.glob("*.pdf"))
+    pdfs = sorted(CONTEXT_DIR.glob("*.pdf"))
     if not pdfs:
-        log.error("nenhum PDF em %s", CONTEXTO)
+        log.error("nenhum PDF em %s", CONTEXT_DIR)
         sys.exit(1)
 
+    mapa = load_titulos()
     chunks = []
     livros = []
     for pdf in pdfs:
-        livro = titulo_de(pdf.name)
+        livro = titulo_de(pdf.name, mapa)
         livros.append({"nome": livro, "arquivo": pdf.name})
         try:
             texto = extrair(pdf)

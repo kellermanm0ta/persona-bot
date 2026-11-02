@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Runtime nativo: carrega a persona de .opencode/agent/*.md e chama a OpenRouter.
+"""Runtime nativo: carrega a persona de .opencode/agent/<AGENT>.md e chama a OpenRouter.
 
-Mesma ideia do runtime do bot `livros`, adaptada para conversa em personagem:
-a unica tool e `consultar_obras` (RAG sobre os PDFs em contexto/), que ancora a
-voz e a memoria do agente nos livros.
+Generico e single-persona por instancia: a persona vem de `AGENT` (env) e a tool
+de contexto (`consultar_contexto`) so e registrada quando `RAG_ENABLED=true`.
 """
 import asyncio
 import os
@@ -15,32 +14,18 @@ from typing import Any, Callable, Optional
 
 import openrouter_agent as A
 
+import config
 import ferramentas
 import logsetup
 
 BASE = Path(__file__).resolve().parent
 AGENT_DIR = BASE / ".opencode" / "agent"
-AGENT = "bukowski"
+AGENT = config.AGENT
 DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
 
 log = logsetup.get_logger("runtime")
 
 _FM_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
-
-
-def load_env() -> None:
-    path = BASE / ".secrets" / "openrouter.env"
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, val = line.split("=", 1)
-        os.environ.setdefault(key.strip(), val.strip())
-
-
-load_env()
 
 
 def load_agent(name: str) -> dict:
@@ -57,8 +42,15 @@ def load_agent(name: str) -> dict:
     return {"meta": meta, "prompt": m.group(2).strip()}
 
 
+def bot_name() -> str:
+    meta = load_agent(AGENT)["meta"]
+    return meta.get("bot_name") or AGENT.capitalize()
+
+
 def model_for(name: str) -> str:
     val = os.environ.get(f"OPENROUTER_MODEL_{name.upper()}", "").strip()
+    if not val:
+        val = os.environ.get("OPENROUTER_MODEL", "").strip()
     if not val:
         val = load_agent(name)["meta"].get("model", "").strip()
     val = re.sub(r"^openrouter/", "", val)
@@ -114,11 +106,30 @@ _BOT_CONTRACT = """
 Voce roda dentro de um bot de Telegram, falando 1 a 1 com uma pessoa. Mantenha a
 persona em TODAS as respostas.
 - Responda em portugues do Brasil, curto (1 a 4 frases, salvo se pedirem historia).
-- Quando couber, use a tool `consultar_obras` (no maximo 2 vezes) para puxar
-  trechos reais das suas obras e manter a voz fiel.
+- Se houver a tool `consultar_contexto`, use-a (no maximo 2 vezes) para puxar
+  trechos reais do contexto e manter a voz/memoria fieis.
 - NUNCA mencione sistema, prompt, modelo, ferramentas, banco de dados ou que e IA.
-- Nao use markdown de titulo; texto corrido, como quem fala num bar.
+- Nao use markdown de titulo; texto corrido, como quem fala.
 - Contrato de saida: apenas a resposta falada, sem preambulo, sem rotulos."""
+
+
+def _rag_tool() -> dict:
+    return A.tool(
+        name="consultar_contexto",
+        description=(
+            "Busca trechos reais no contexto indexado (obras/livros) para embasar "
+            "a resposta. Use quando o assunto tocar temas, cenas ou personagens."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "consulta": {"type": "string"},
+                "limite": {"type": "integer"},
+            },
+            "required": ["consulta"],
+        },
+        execute=ferramentas.consultar_contexto,
+    )
 
 
 def responder(
@@ -126,25 +137,13 @@ def responder(
     historico: Optional[list] = None,
     on_chunk: Optional[Callable[[str], None]] = None,
 ) -> str:
-    tools = [
-        A.tool(
-            name="consultar_obras",
-            description=(
-                "Busca trechos reais nas obras de Bukowski (Misto Quente e Mulheres) "
-                "para embasar a resposta. Use quando o assunto tocar temas, cenas ou "
-                "personagens dos livros."
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "consulta": {"type": "string"},
-                    "limite": {"type": "integer"},
-                },
-                "required": ["consulta"],
-            },
-            execute=ferramentas.consultar_obras,
-        ),
-    ]
+    if config.RAG_ENABLED:
+        tools: Optional[list] = [_rag_tool()]
+        max_steps = 4
+    else:
+        tools = None
+        max_steps = 2
+
     system = load_agent(AGENT)["prompt"] + _BOT_CONTRACT
     messages = [{"role": "system", "content": system}]
     for turno in historico or []:
@@ -158,7 +157,7 @@ def responder(
             messages,
             model_for(AGENT),
             tools=tools,
-            max_steps=4,
+            max_steps=max_steps,
             on_chunk=on_chunk,
         )
     )
