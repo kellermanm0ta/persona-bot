@@ -53,6 +53,26 @@ services:
       - ./data/buda:/app/.state
       - model-cache:/models
 
+  kardec:
+    <<: *persona
+    container_name: persona-kardec
+    env_file:
+      - ./.secrets/openrouter.env
+      - ./.secrets/kardec/telegram.env
+    environment:
+      AGENT: kardec
+      RAG_ENABLED: "true"
+      RETRIEVAL: hybrid
+      CONTEXT_DIR: contexto/kardec
+      STATE_DIR: /app/.state
+      INDEX_ON_START: "true"
+      HOME: /models
+      FASTEMBED_CACHE_PATH: /models
+    volumes:
+      - ./contexto/kardec:/app/contexto/kardec:ro
+      - ./data/kardec:/app/.state
+      - model-cache:/models
+
 volumes:
   model-cache:
     name: persona-bots_model-cache

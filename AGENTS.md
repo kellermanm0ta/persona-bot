@@ -2,7 +2,7 @@
 
 Telegram bot that chats **in character as a persona**, in pt-BR, optionally grounded
 in a document context via RAG. **One persona per instance** — the code is generic and
-single-persona; multiplicities (Bukowski, Buda, …) are a deployment concern handled by
+single-persona; multiplicities (Bukowski, Buda, Kardec, …) are a deployment concern handled by
 `docker-compose.yml`. There is **no test suite, linter or build step** — verification is
 running the pieces directly.
 
@@ -36,7 +36,7 @@ frontmatter and injects a non-interactive output contract at call time.
 | `RETRIEVAL` | `hybrid` \| `bm25` | `hybrid` |
 | `EMBED_MODEL` | fastembed model | `.../paraphrase-multilingual-MiniLM-L12-v2` |
 | `OPENROUTER_MODEL` / `OPENROUTER_MODEL_<AGENT>` | model override | persona frontmatter |
-| `MAX_HISTORY` | turns kept per chat | `12` |
+| `MAX_HISTORY` | messages kept per chat | `12` |
 | `INDEX_ON_START` | index at container start if missing | `true` |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_IDS` | secret (env_file) | — |
 | `OPENROUTER_API_KEY` | secret (`.secrets/openrouter.env`) | — |
@@ -49,8 +49,12 @@ frontmatter and injects a non-interactive output contract at call time.
 contexto/<persona>/*.pdf         context (optional); `titulos.json` maps file -> title
 .secrets/openrouter.env          shared OpenRouter key
 .secrets/<persona>/telegram.env  one bot/token per persona
-data/<persona>/                  STATE_DIR (sessions, log, corpus, embeddings)
+data/<persona>/                  STATE_DIR (sessions, corpus, embeddings)
 ```
+
+`contexto/` is gitignored, so a persona's `titulos.json` is **local only** — recreate it
+per host (it is not versioned). `data/<persona>/bot.log` only exists on the host (written
+by `run_bot.sh`'s redirect); in Docker the logs go to `docker logs`.
 
 ## Core scripts
 

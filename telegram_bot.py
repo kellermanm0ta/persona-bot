@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Bot do Telegram: conversa em personagem com o agente "Bukowski".
+"""Bot do Telegram: conversa em personagem com o agente definido por AGENT.
 
-Long-polling nativo (sem Docker, sem opencode). O LLM e chamado direto na
-OpenRouter via runtime.responder(); a memoria de conversa fica em
-.state/sessions.json.
+Long-polling nativo. O LLM e chamado direto na OpenRouter via runtime.responder();
+a memoria de conversa fica em STATE_DIR/sessions.json.
 """
 import json
 import os
@@ -49,6 +48,16 @@ def build_help() -> str:
 
 
 HELP = build_help()
+
+
+def _redact(msg):
+    """Remove o token do bot de qualquer mensagem/erro antes de logar ou enviar.
+
+    Excecoes do requests incluem a URL completa, que contem o token em
+    https://api.telegram.org/bot<TOKEN>/<method>.
+    """
+    text = str(msg)
+    return text.replace(TOKEN, "***") if TOKEN else text
 
 
 def api(method, **params):
@@ -155,8 +164,8 @@ def responder_worker(chat_id, texto, message_id):
         resposta = runtime.responder(texto, historico=get_history(chat_id))
         resposta = (resposta or "").strip() or "..."
     except Exception as e:
-        log(f"resposta erro: {e!r}")
-        send(chat_id, f"Tive um problema ao responder: {e}", reply_to=message_id)
+        log(f"resposta erro: {_redact(repr(e))}")
+        send(chat_id, f"Tive um problema ao responder: {_redact(e)}", reply_to=message_id)
         _busy.discard(chat_id)
         return
     add_turn(chat_id, "user", texto)
@@ -243,7 +252,7 @@ def main():
                 allowed_updates='["message"]',
             )
         except requests.RequestException as e:
-            log(f"getUpdates falhou: {e}")
+            log(f"getUpdates falhou: {_redact(e)}")
             time.sleep(5)
             continue
 
@@ -255,9 +264,9 @@ def main():
             try:
                 handle_message(msg)
             except Exception as e:
-                log(f"erro processando update: {e!r}")
+                log(f"erro processando update: {_redact(repr(e))}")
                 try:
-                    send(msg["chat"]["id"], f"Erro inesperado: {e}")
+                    send(msg["chat"]["id"], f"Erro inesperado: {_redact(e)}")
                 except Exception:
                     pass
 

@@ -1,4 +1,4 @@
-# persona-bot
+# persona-bots
 
 Bot de Telegram **genérico** que conversa em personagem, em pt-BR, opcionalmente
 fundamentado num contexto (PDFs) via **RAG híbrido** (BM25 + embeddings locais).
@@ -33,11 +33,12 @@ data/<persona>/                  estado: sessions, log, corpus, embeddings
 
 ## Adicionar uma persona
 
-1. `.opencode/agent/<persona>.md` (copie o molde de `buda.md`/`bukowski.md`; ajuste o
-   `model:` e opcionalmente `bot_name:`).
-2. (Opcional) PDFs em `contexto/<persona>/` + `contexto/<persona>/titulos.json`.
+1. `.opencode/agent/<persona>.md` (copie o molde de `buda.md`/`bukowski.md`/`kardec.md`;
+   ajuste o `model:` e opcionalmente `bot_name:`).
+2. (Opcional) PDFs em `contexto/<persona>/` + `contexto/<persona>/titulos.json` (este
+   arquivo é **local, não versionado** — o `contexto/` está no `.gitignore`).
 3. `.secrets/<persona>/telegram.env` com o token do bot (BotFather).
-4. Um serviço no `docker-compose.yml` (copie o bloco `bukowski` e ajuste `AGENT`,
+4. Um serviço no `docker-compose.yml` (copie o bloco `kardec` e ajuste `AGENT`,
    `RAG_ENABLED`, `CONTEXT_DIR` e os volumes).
 
 ## Rodar com Docker (recomendado)
