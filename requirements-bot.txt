@@ -1,0 +1,5 @@
+openrouter==1.1.0
+openrouter-agent-sdk==0.8.0
+requests>=2.31
+numpy
+fastembed

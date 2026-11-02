@@ -1,0 +1,15 @@
+.state/
+.venv/
+.secrets/*
+!.secrets/*.example
+__pycache__/
+*.pyc
+contexto/
+
+# caches / editores
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.idea/
+.vscode/
