@@ -53,6 +53,22 @@ services:
       - ./data/buda:/app/.state
       - model-cache:/models
 
+  ramanujan:
+    <<: *persona
+    container_name: persona-ramanujan
+    env_file:
+      - ./.secrets/openrouter.env
+      - ./.secrets/ramanujan/telegram.env
+    environment:
+      AGENT: ramanujan
+      RAG_ENABLED: "false"
+      STATE_DIR: /app/.state
+      HOME: /models
+      FASTEMBED_CACHE_PATH: /models
+    volumes:
+      - ./data/ramanujan:/app/.state
+      - model-cache:/models
+
   kardec:
     <<: *persona
     container_name: persona-kardec

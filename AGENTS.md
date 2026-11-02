@@ -2,7 +2,7 @@
 
 Telegram bot that chats **in character as a persona**, in pt-BR, optionally grounded
 in a document context via RAG. **One persona per instance** — the code is generic and
-single-persona; multiplicities (Bukowski, Buda, Kardec, …) are a deployment concern handled by
+single-persona; multiplicities (Bukowski, Buda, Kardec, Ramanujan, …) are a deployment concern handled by
 `docker-compose.yml`. There is **no test suite, linter or build step** — verification is
 running the pieces directly.
 

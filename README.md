@@ -33,7 +33,7 @@ data/<persona>/                  estado: sessions, log, corpus, embeddings
 
 ## Adicionar uma persona
 
-1. `.opencode/agent/<persona>.md` (copie o molde de `buda.md`/`bukowski.md`/`kardec.md`;
+1. `.opencode/agent/<persona>.md` (copie o molde de `buda.md`/`bukowski.md`/`kardec.md`/`ramanujan.md`;
    ajuste o `model:` e opcionalmente `bot_name:`).
 2. (Opcional) PDFs em `contexto/<persona>/` + `contexto/<persona>/titulos.json` (este
    arquivo é **local, não versionado** — o `contexto/` está no `.gitignore`).
