@@ -103,8 +103,8 @@ def run(coro: Any) -> Any:
 _BOT_CONTRACT = """
 
 ## Instrucoes de execucao (bot, nao-interativo)
-Voce roda dentro de um bot de Telegram, falando 1 a 1 com uma pessoa. Mantenha a
-persona em TODAS as respostas.
+Voce roda dentro de um bot de Telegram, falando com uma pessoa ou num grupo
+pequeno. Mantenha a persona em TODAS as respostas.
 - Responda em portugues do Brasil, curto (1 a 4 frases, salvo se pedirem historia).
 - Se houver a tool `consultar_contexto`, use-a (no maximo 2 vezes) para puxar
   trechos reais do contexto e manter a voz/memoria fieis.
@@ -136,6 +136,7 @@ def responder(
     mensagem: str,
     historico: Optional[list] = None,
     on_chunk: Optional[Callable[[str], None]] = None,
+    instrucao_extra: Optional[str] = None,
 ) -> str:
     if config.RAG_ENABLED:
         tools: Optional[list] = [_rag_tool()]
@@ -145,6 +146,8 @@ def responder(
         max_steps = 2
 
     system = load_agent(AGENT)["prompt"] + _BOT_CONTRACT
+    if instrucao_extra:
+        system += "\n\n" + instrucao_extra
     messages = [{"role": "system", "content": system}]
     for turno in historico or []:
         role = turno.get("role")

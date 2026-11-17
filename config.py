@@ -6,6 +6,7 @@ define `AGENT`, `RAG_ENABLED`, `CONTEXT_DIR`, etc. Segredos (token do Telegram,
 chave da OpenRouter) chegam por `env_file`/`.secrets`. Ver AGENTS.md / README.md.
 """
 import os
+import re
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
@@ -38,6 +39,15 @@ def _path(name: str, default: str) -> Path:
     return p if p.is_absolute() else (BASE / p)
 
 
+def _int_set(name: str) -> set[int]:
+    val = os.environ.get(name, "").strip()
+    return {
+        int(x)
+        for x in re.split(r"[,\s]+", val)
+        if x.strip().lstrip("-").isdigit()
+    }
+
+
 AGENT = os.environ.get("AGENT", "bukowski").strip() or "bukowski"
 RAG_ENABLED = _flag("RAG_ENABLED", False)
 RETRIEVAL = os.environ.get("RETRIEVAL", "hybrid").strip().lower() or "hybrid"
@@ -49,3 +59,10 @@ CONTEXT_DIR = _path("CONTEXT_DIR", f"contexto/{AGENT}")
 STATE_DIR = _path("STATE_DIR", f"data/{AGENT}")
 MAX_HISTORY = int(os.environ.get("MAX_HISTORY", "12") or "12")
 INDEX_ON_START = _flag("INDEX_ON_START", True)
+
+# Ponte HTTP entre personas (rede Docker). Desligada por padrao.
+BARRAMENTO_ENABLED = _flag("BARRAMENTO_ENABLED", False)
+BARRAMENTO_URL = os.environ.get("BARRAMENTO_URL", "http://barramento:8080").rstrip("/")
+BARRAMENTO_TOKEN = os.environ.get("BARRAMENTO_TOKEN", "").strip()
+BARRAMENTO_CHAT_IDS = _int_set("BARRAMENTO_CHAT_IDS")
+BARRAMENTO_POLL_TIMEOUT = int(os.environ.get("BARRAMENTO_POLL_TIMEOUT", "25") or "25")

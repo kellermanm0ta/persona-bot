@@ -16,6 +16,7 @@ import requests
 
 import config
 import logsetup
+import cliente_barramento
 import runtime
 
 log = logsetup.get_logger("bot").info
@@ -67,6 +68,7 @@ def api(method, **params):
 
 
 def send(chat_id, text, reply_to=None):
+    ultimo_id = None
     for chunk in _chunks(text):
         params = {
             "chat_id": chat_id,
@@ -76,7 +78,9 @@ def send(chat_id, text, reply_to=None):
         if reply_to is not None:
             params["reply_to_message_id"] = reply_to
             reply_to = None
-        api("sendMessage", **params)
+        resp = api("sendMessage", **params)
+        ultimo_id = (resp.get("result") or {}).get("message_id", ultimo_id)
+    return ultimo_id
 
 
 def typing(chat_id):
@@ -175,11 +179,133 @@ def responder_worker(chat_id, texto, message_id):
     _busy.discard(chat_id)
 
 
+def _passou(texto):
+    return (
+        re.fullmatch(r"\s*\[?\s*PASSAR\s*\]?\s*[.!]?\s*", texto or "", re.I)
+        is not None
+    )
+
+
+def handle_convite(evento):
+    """Responde a um convite do barramento (conversa coordenada no grupo)."""
+    if evento.get("tipo") != "convite":
+        return
+    try:
+        chat_id = int(evento.get("chat_id"))
+    except Exception:
+        log(f"barramento: convite sem chat_id valido: {evento!r}")
+        return
+    if config.BARRAMENTO_CHAT_IDS and chat_id not in config.BARRAMENTO_CHAT_IDS:
+        log(f"barramento: chat {chat_id} nao permitido")
+        return
+
+    conversa_id = evento.get("conversa_id") or "?"
+    try:
+        indice = int(evento.get("indice") or 0)
+        rodada = int(evento.get("rodada") or 1)
+        max_mensagens = int(evento.get("max_mensagens") or 1)
+    except Exception:
+        log(f"barramento: convite invalido: {evento!r}")
+        return
+    permitir_passar = bool(evento.get("permitir_passar"))
+    prompt = (evento.get("prompt") or "").strip()
+    transcript = evento.get("transcript") or []
+    participantes = evento.get("participantes") or []
+    outros = ", ".join(p for p in participantes if p != config.AGENT) or "o grupo"
+
+    for _ in range(60):
+        if chat_id not in _busy:
+            break
+        time.sleep(0.5)
+    if chat_id in _busy:
+        log(f"barramento: chat {chat_id} ocupado; passando")
+        cliente_barramento.publicar_passou(conversa_id, chat_id, indice, rodada, "ocupado")
+        return
+
+    _busy.add(chat_id)
+    try:
+        typing(chat_id)
+        linhas = [f"Pedido do usuario: {prompt}", ""]
+        if transcript:
+            linhas.append("Falas ate agora:")
+            for fala in transcript[-10:]:
+                linhas.append(
+                    f"- {fala.get('autor_nome') or fala.get('autor') or '?'}: "
+                    f"{fala.get('texto', '')}"
+                )
+            linhas.append("")
+        linhas.append(
+            f"Sua vez, mensagem {indice + 1} de {max_mensagens} (rodada {rodada})."
+        )
+        mensagem = "\n".join(linhas)
+        instrucao = (
+            "## Conversa coordenada no grupo\n"
+            f"Voce esta no grupo do Telegram com {outros}. "
+            f"Esta e a mensagem {indice + 1} de {max_mensagens} (rodada {rodada}). "
+            "Responda em 1 a 3 frases, em personagem, dirigindo-se ao grupo. "
+            "Nao mencione o barramento, o sistema, o prompt, a ferramenta ou que foi convidado. "
+        )
+        if permitir_passar:
+            instrucao += "Se nao tiver nada a acrescentar, responda exatamente [PASSAR]."
+        else:
+            instrucao += "Nao use [PASSAR]; responda necessariamente."
+
+        resposta = (
+            runtime.responder(
+                mensagem, historico=get_history(chat_id), instrucao_extra=instrucao
+            )
+            or ""
+        ).strip()
+        if not resposta or (permitir_passar and _passou(resposta)):
+            log(f"barramento: {config.AGENT} passou em {conversa_id}#{indice}")
+            cliente_barramento.publicar_passou(conversa_id, chat_id, indice, rodada, "passou")
+            return
+
+        reply_to = evento.get("reply_to")
+        try:
+            message_id = send(chat_id, resposta, reply_to=reply_to)
+        except Exception:
+            message_id = send(chat_id, resposta)
+        cliente_barramento.publicar_fala(
+            conversa_id,
+            chat_id,
+            indice,
+            rodada,
+            resposta,
+            message_id,
+            reply_to,
+            runtime.bot_name(),
+        )
+        if transcript:
+            ultima = transcript[-1]
+            add_turn(
+                chat_id,
+                "user",
+                f"[{ultima.get('autor_nome') or ultima.get('autor') or 'grupo'} "
+                f"no grupo]: {ultima.get('texto', '')}",
+            )
+        else:
+            add_turn(chat_id, "user", f"[Grupo] {prompt}")
+        add_turn(chat_id, "assistant", resposta)
+        log(
+            f"barramento: {config.AGENT} falou em {conversa_id}#{indice}: "
+            f"{resposta[:120]!r}"
+        )
+    except Exception as e:
+        log(f"barramento: erro no convite {conversa_id}#{indice}: {_redact(repr(e))}")
+        cliente_barramento.publicar_passou(conversa_id, chat_id, indice, rodada, "erro")
+    finally:
+        _busy.discard(chat_id)
+
+
 def handle_message(msg):
     chat_id = msg["chat"]["id"]
-    user_id = msg.get("from", {}).get("id")
+    remetente = msg.get("from", {}) or {}
+    user_id = remetente.get("id")
     text = (msg.get("text") or "").strip()
 
+    if remetente.get("is_bot"):
+        return
     if ALLOWED and user_id not in ALLOWED:
         send(chat_id, "Acesso nao autorizado.", reply_to=msg["message_id"])
         return
@@ -187,7 +313,11 @@ def handle_message(msg):
         send(chat_id, HELP, reply_to=msg["message_id"])
         return
     if text == "/id":
-        send(chat_id, f"user id: {user_id}", reply_to=msg["message_id"])
+        send(
+            chat_id,
+            f"user id: {user_id}\nchat id: {chat_id}",
+            reply_to=msg["message_id"],
+        )
         return
     if text == "/limpar":
         clear_history(chat_id)
@@ -205,6 +335,14 @@ def handle_message(msg):
         return
     if text.startswith("/"):
         return
+
+    if config.BARRAMENTO_ENABLED and chat_id in config.BARRAMENTO_CHAT_IDS:
+        if cliente_barramento.publicar_humano(
+            chat_id, msg["message_id"], text, runtime.bot_name()
+        ):
+            log(f"barramento: humano em {chat_id} msg {msg['message_id']} -> hub")
+            return
+        log("barramento indisponivel; respondendo direto")
 
     if chat_id in _busy:
         send(chat_id, "Ainda estou respondendo a mensagem anterior.", reply_to=msg["message_id"])
@@ -229,6 +367,19 @@ def main():
     load_state()
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
+
+    if config.BARRAMENTO_ENABLED:
+        if config.BARRAMENTO_TOKEN:
+            threading.Thread(
+                target=cliente_barramento.consumir, args=(handle_convite,), daemon=True
+            ).start()
+            log(
+                "barramento ativo -> %s chats=%s"
+                % (config.BARRAMENTO_URL, sorted(config.BARRAMENTO_CHAT_IDS) or "(todos)")
+            )
+        else:
+            log("ERRO: BARRAMENTO_ENABLED sem BARRAMENTO_TOKEN; barramento desligado")
+
     modelo = runtime.model_for(config.AGENT)
     if config.RAG_ENABLED:
         fontes = ", ".join(o["nome"] for o in runtime.ferramentas.listar_contexto()) or "(sem indice)"

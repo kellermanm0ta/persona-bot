@@ -23,6 +23,7 @@ services:
     env_file:
       - ./.secrets/openrouter.env
       - ./.secrets/bukowski/telegram.env
+      - ./.secrets/barramento.env
     environment:
       AGENT: bukowski
       RAG_ENABLED: "true"
@@ -30,12 +31,17 @@ services:
       CONTEXT_DIR: contexto/bukowski
       STATE_DIR: /app/.state
       INDEX_ON_START: "true"
+      BARRAMENTO_ENABLED: "true"
+      BARRAMENTO_URL: "http://barramento:8080"
       HOME: /models
       FASTEMBED_CACHE_PATH: /models
     volumes:
       - ./contexto/bukowski:/app/contexto/bukowski:ro
       - ./data/bukowski:/app/.state
       - model-cache:/models
+    networks:
+      - default
+      - agentes
 
   buda:
     <<: *persona
@@ -69,12 +75,46 @@ services:
       - ./data/ramanujan:/app/.state
       - model-cache:/models
 
+  barramento:
+    <<: *persona
+    container_name: persona-barramento
+    entrypoint: ["/app/.venv/bin/python", "/app/barramento.py"]
+    env_file:
+      - ./.secrets/barramento.env
+    environment:
+      AGENT: barramento
+      BARRAMENTO_BOTS: "pessoa,bukowski"
+      BARRAMENTO_ORDEM: "pessoa,bukowski"
+      BARRAMENTO_PORTA: "8080"
+      BARRAMENTO_STATE: /app/.state/eventos.jsonl
+      BARRAMENTO_TIMEOUT: "60"
+      BARRAMENTO_MAX_MENSAGENS: "12"
+      BARRAMENTO_RODADAS_PADRAO: "1"
+    volumes:
+      - ./data/barramento:/app/.state
+    networks:
+      - agentes
+    expose:
+      - "8080"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/app/.venv/bin/python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/saude', timeout=3)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   pessoa:
     <<: *persona
     container_name: persona-pessoa
     env_file:
       - ./.secrets/openrouter.env
       - ./.secrets/pessoa/telegram.env
+      - ./.secrets/barramento.env
     environment:
       AGENT: pessoa
       RAG_ENABLED: "true"
@@ -82,13 +122,23 @@ services:
       CONTEXT_DIR: contexto/pessoa
       STATE_DIR: /app/.state
       INDEX_ON_START: "true"
+      BARRAMENTO_ENABLED: "true"
+      BARRAMENTO_URL: "http://barramento:8080"
       HOME: /models
       FASTEMBED_CACHE_PATH: /models
     volumes:
       - ./contexto/pessoa:/app/contexto/pessoa:ro
       - ./data/pessoa:/app/.state
       - model-cache:/models
+    networks:
+      - default
+      - agentes
 
 volumes:
   model-cache:
     name: persona-bots_model-cache
+
+networks:
+  agentes:
+    name: persona-bots_agentes
+    internal: true

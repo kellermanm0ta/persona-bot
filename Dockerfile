@@ -11,7 +11,7 @@ RUN python -m venv /app/.venv \
  && /app/.venv/bin/pip install --no-cache-dir --upgrade pip \
  && /app/.venv/bin/pip install --no-cache-dir -r requirements-bot.txt
 
-COPY config.py logsetup.py ferramentas.py indexar.py runtime.py telegram_bot.py ./
+COPY config.py logsetup.py ferramentas.py indexar.py runtime.py telegram_bot.py cliente_barramento.py barramento.py ./
 COPY .opencode/agent ./.opencode/agent
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 
