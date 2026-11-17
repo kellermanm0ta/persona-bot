@@ -19,13 +19,13 @@ telegram_bot.py -> runtime.py -> OpenRouter (openrouter-agent-sdk)
 
 - `config.py` lê tudo do ambiente (`AGENT`, `RAG_ENABLED`, `CONTEXT_DIR`, …).
 - Se `RAG_ENABLED=false`, o bot é só persona (sem corpus, sem tool).
-- `indexar.py` gera o índice BM25 e os embeddings a partir dos PDFs de `CONTEXT_DIR`.
+- `indexar.py` gera o índice BM25 e os embeddings a partir dos PDFs/TXTs de `CONTEXT_DIR`.
 
 ## Layout
 
 ```
 .opencode/agent/<persona>.md     a persona (fonte da verdade); `bot_name:` opcional
-contexto/<persona>/*.pdf         contexto opcional; `titulos.json` mapeia arquivo -> titulo
+contexto/<persona>/*.pdf|*.txt    contexto opcional; `titulos.json` mapeia arquivo -> titulo
 .secrets/openrouter.env          chave da OpenRouter (compartilhada)
 .secrets/<persona>/telegram.env  token do bot (um por persona)
 data/<persona>/                  estado: sessions, log, corpus, embeddings
@@ -33,12 +33,13 @@ data/<persona>/                  estado: sessions, log, corpus, embeddings
 
 ## Adicionar uma persona
 
-1. `.opencode/agent/<persona>.md` (copie o molde de `buda.md`/`bukowski.md`/`kardec.md`/`ramanujan.md`;
+1. `.opencode/agent/<persona>.md` (copie o molde de `buda.md`/`bukowski.md`/`pessoa.md`/`ramanujan.md`;
    ajuste o `model:` e opcionalmente `bot_name:`).
-2. (Opcional) PDFs em `contexto/<persona>/` + `contexto/<persona>/titulos.json` (este
-   arquivo é **local, não versionado** — o `contexto/` está no `.gitignore`).
+2. (Opcional) PDFs ou `.txt` em `contexto/<persona>/` + `contexto/<persona>/titulos.json` (este
+   arquivo é **local, não versionado** — o `contexto/` está no `.gitignore`). Para o acervo
+   Pessoa, `coletar_arquivo_pessoa.py` gera esse material a partir de `arquivopessoa.net`.
 3. `.secrets/<persona>/telegram.env` com o token do bot (BotFather).
-4. Um serviço no `docker-compose.yml` (copie o bloco `kardec` e ajuste `AGENT`,
+4. Um serviço no `docker-compose.yml` (copie o bloco `pessoa` e ajuste `AGENT`,
    `RAG_ENABLED`, `CONTEXT_DIR` e os volumes).
 
 ## Rodar com Docker (recomendado)
@@ -77,5 +78,5 @@ em `AGENTS.md`.
 
 ## Aviso
 
-Os PDFs em `contexto/` têm **direitos autorais** e **não** são versionados. Nunca
-comite os PDFs nem um `corpus.json`/`embeddings.npy` pré-construído (contêm trechos).
+Os PDFs/TXTs em `contexto/` têm **direitos autorais** e **não** são versionados. Nunca
+comite os arquivos nem um `corpus.json`/`embeddings.npy` pré-construído (contêm trechos).

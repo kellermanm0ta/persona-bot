@@ -69,24 +69,24 @@ services:
       - ./data/ramanujan:/app/.state
       - model-cache:/models
 
-  kardec:
+  pessoa:
     <<: *persona
-    container_name: persona-kardec
+    container_name: persona-pessoa
     env_file:
       - ./.secrets/openrouter.env
-      - ./.secrets/kardec/telegram.env
+      - ./.secrets/pessoa/telegram.env
     environment:
-      AGENT: kardec
+      AGENT: pessoa
       RAG_ENABLED: "true"
       RETRIEVAL: hybrid
-      CONTEXT_DIR: contexto/kardec
+      CONTEXT_DIR: contexto/pessoa
       STATE_DIR: /app/.state
       INDEX_ON_START: "true"
       HOME: /models
       FASTEMBED_CACHE_PATH: /models
     volumes:
-      - ./contexto/kardec:/app/contexto/kardec:ro
-      - ./data/kardec:/app/.state
+      - ./contexto/pessoa:/app/contexto/pessoa:ro
+      - ./data/pessoa:/app/.state
       - model-cache:/models
 
 volumes:

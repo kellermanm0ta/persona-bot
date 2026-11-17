@@ -2,7 +2,7 @@
 
 Telegram bot that chats **in character as a persona**, in pt-BR, optionally grounded
 in a document context via RAG. **One persona per instance** — the code is generic and
-single-persona; multiplicities (Bukowski, Buda, Kardec, Ramanujan, …) are a deployment concern handled by
+single-persona; multiplicities (Bukowski, Buda, Ramanujan, Pessoa, …) are a deployment concern handled by
 `docker-compose.yml`. There is **no test suite, linter or build step** — verification is
 running the pieces directly.
 
@@ -46,7 +46,7 @@ frontmatter and injects a non-interactive output contract at call time.
 
 ```
 .opencode/agent/<persona>.md     persona (source of truth); `bot_name:` optional
-contexto/<persona>/*.pdf         context (optional); `titulos.json` maps file -> title
+contexto/<persona>/*.pdf|*.txt    context (optional); `titulos.json` maps file -> title
 .secrets/openrouter.env          shared OpenRouter key
 .secrets/<persona>/telegram.env  one bot/token per persona
 data/<persona>/                  STATE_DIR (sessions, corpus, embeddings)
@@ -69,9 +69,13 @@ Everything is Python in the repo root. Host runs use the dedicated venv:
 - `ferramentas.py` — `consultar_contexto` (the only tool); `buscar_hibrido()` = BM25 +
   cosine over local `fastembed` embeddings, fused by RRF; falls back to BM25 if vectors
   are missing. `RETRIEVAL=bm25` skips vectors. Also `tokenize`/`limpar_texto`.
-- `indexar.py` — `pdftotext -layout` → clean → chunk (~900 chars) → `STATE_DIR/corpus.json`
-  + `STATE_DIR/embeddings.npy` + `index_meta.json`. **Re-run after adding/changing PDFs.**
-  Titles come from `CONTEXT_DIR/titulos.json` (optional), else the filename.
+- `indexar.py` — PDFs via `pdftotext -layout` (ou `.txt` direto) → clean → chunk (~900 chars)
+  → `STATE_DIR/corpus.json` + `STATE_DIR/embeddings.npy` + `index_meta.json`. **Re-run after
+  adding/changing files.** Titles come from `CONTEXT_DIR/titulos.json` (optional), else the
+  filename.
+- `coletar_arquivo_pessoa.py` — coletor/curador do Arquivo Pessoa (host, opcional): gera
+  `contexto/pessoa/*.txt` + `titulos.json` + `manifesto.json` a partir de
+  `http://arquivopessoa.net/`. Cache de HTML em `data/pessoa/cache_html`.
 - `logsetup.py` — stdlib logging to **stdout/stderr** (visible in `docker logs`); on the
   host `run_bot.sh` redirects it to `STATE_DIR/bot.log`. Logger `<AGENT>.*`.
 
@@ -124,7 +128,7 @@ invoked the tool (`call_model ... tools=1`).
 
 - `.gitignore` excludes `data/`, `.venv/`, `.secrets/*` (only `*.example` kept),
   `__pycache__/`, `contexto/`, `.env`.
-- The `contexto/*.pdf` are (often) copyrighted — **never version them**, nor a prebuilt
+- The `contexto/` PDFs/TXTs are (often) copyrighted — **never version them**, nor a prebuilt
   `corpus.json`/`embeddings.npy` (they contain verbatim excerpts).
 - Keep `.secrets/`, `data/`, `.venv/` out of version control; never commit the
   API key or bot tokens.

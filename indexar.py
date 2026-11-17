@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Indexa os PDFs de CONTEXT_DIR num corpus BM25 + embeddings em STATE_DIR.
+"""Indexa os PDFs/TXTs de CONTEXT_DIR num corpus BM25 + embeddings em STATE_DIR.
 
 Uso:
     ./.venv/bin/python indexar.py
 
-Extrai o texto (pdftotext), limpa o boilerplate, quebra em trechos por paragrafo
-e grava o indice usado por ferramentas.consultar_contexto. Rode novamente sempre
-que adicionar/trocar PDFs. CONTEXT_DIR (default: contexto/<AGENT>) e STATE_DIR
-(default: .state) vem do ambiente; um `titulos.json` opcional em CONTEXT_DIR mapeia
-arquivo -> titulo bonito (senao usa o nome do arquivo).
+PDFs passam por `pdftotext`; arquivos `.txt` sao lidos diretamente. O texto e
+limpo, quebrado em trechos por paragrafo e gravado no indice usado por
+ferramentas.consultar_contexto. Rode novamente sempre que adicionar/trocar
+arquivos. CONTEXT_DIR (default: contexto/<AGENT>) e STATE_DIR (default: .state)
+vem do ambiente; um `titulos.json` opcional em CONTEXT_DIR mapeia arquivo ->
+titulo bonito (senao usa o nome do arquivo).
 """
 import json
 import subprocess
@@ -40,13 +41,19 @@ def titulo_de(nome: str, mapa: dict) -> str:
     return mapa.get(nome) or mapa.get(stem) or stem
 
 
-def extrair(pdf: Path) -> str:
+def extrair_pdf(pdf: Path) -> str:
     r = subprocess.run(
         ["pdftotext", "-layout", str(pdf), "-"],
         capture_output=True,
         check=True,
     )
     return r.stdout.decode("utf-8", errors="replace")
+
+
+def extrair_arquivo(arquivo: Path) -> str:
+    if arquivo.suffix.lower() == ".pdf":
+        return extrair_pdf(arquivo)
+    return arquivo.read_text(encoding="utf-8", errors="replace")
 
 
 def chunks_de(texto: str, livro: str):
@@ -89,25 +96,63 @@ def chunks_de(texto: str, livro: str):
     return out
 
 
+def secoes_de_txt(texto: str) -> list[tuple[str, str]]:
+    """Divide um .txt do coletor em (titulo, corpo) pelos cabecalhos `## `."""
+    secoes = []
+    titulo = None
+    buf = []
+    for ln in texto.splitlines():
+        if ln.startswith("## "):
+            if titulo is not None:
+                secoes.append((titulo, "\n".join(buf)))
+            titulo = ln[3:].strip()
+            buf = []
+        elif titulo is not None:
+            buf.append(ln)
+    if titulo is not None:
+        secoes.append((titulo, "\n".join(buf)))
+    return secoes
+
+
+def chunks_de_txt(texto: str, livro: str):
+    """Chunks por texto, repetindo o titulo em cada trecho (melhora a busca)."""
+    secoes = secoes_de_txt(texto)
+    if not secoes:
+        return chunks_de(texto, livro)
+    out = []
+    for titulo, corpo in secoes:
+        if not corpo.strip():
+            continue
+        rotulo = f"{livro} - {titulo}" if titulo else livro
+        for _, trecho in chunks_de(corpo, rotulo):
+            if titulo:
+                trecho = f"{titulo}\n{trecho}"
+            out.append((rotulo, trecho))
+    return out
+
+
 def build():
-    pdfs = sorted(CONTEXT_DIR.glob("*.pdf"))
-    if not pdfs:
-        log.error("nenhum PDF em %s", CONTEXT_DIR)
+    arquivos = sorted([*CONTEXT_DIR.glob("*.pdf"), *CONTEXT_DIR.glob("*.txt")])
+    if not arquivos:
+        log.error("nenhum PDF/TXT em %s", CONTEXT_DIR)
         sys.exit(1)
 
     mapa = load_titulos()
     chunks = []
     livros = []
-    for pdf in pdfs:
-        livro = titulo_de(pdf.name, mapa)
-        livros.append({"nome": livro, "arquivo": pdf.name})
+    for arquivo in arquivos:
+        livro = titulo_de(arquivo.name, mapa)
+        livros.append({"nome": livro, "arquivo": arquivo.name})
         try:
-            texto = extrair(pdf)
+            texto = extrair_arquivo(arquivo)
         except Exception as e:
-            log.error("falha ao extrair %s: %r", pdf.name, e)
+            log.error("falha ao extrair %s: %r", arquivo.name, e)
             continue
-        cs = chunks_de(texto, livro)
-        log.info("%s -> %d trechos", pdf.name, len(cs))
+        if arquivo.suffix.lower() == ".txt":
+            cs = chunks_de_txt(texto, livro)
+        else:
+            cs = chunks_de(texto, livro)
+        log.info("%s -> %d trechos", arquivo.name, len(cs))
         for livro_, txt in cs:
             chunks.append({"livro": livro_, "texto": txt})
 
