@@ -27,18 +27,16 @@ services:
     environment:
       AGENT: bukowski
       RAG_ENABLED: "true"
-      RETRIEVAL: hybrid
+      RETRIEVAL: hybrid_api
+      EMBED_MODEL: baai/bge-m3
       CONTEXT_DIR: contexto/bukowski
       STATE_DIR: /app/.state
       INDEX_ON_START: "true"
       BARRAMENTO_ENABLED: "true"
       BARRAMENTO_URL: "http://barramento:8080"
-      HOME: /models
-      FASTEMBED_CACHE_PATH: /models
     volumes:
       - ./contexto/bukowski:/app/contexto/bukowski:ro
       - ./data/bukowski:/app/.state
-      - model-cache:/models
     networks:
       - default
       - agentes
@@ -53,11 +51,8 @@ services:
       AGENT: buda
       RAG_ENABLED: "false"
       STATE_DIR: /app/.state
-      HOME: /models
-      FASTEMBED_CACHE_PATH: /models
     volumes:
       - ./data/buda:/app/.state
-      - model-cache:/models
 
   ramanujan:
     <<: *persona
@@ -69,11 +64,8 @@ services:
       AGENT: ramanujan
       RAG_ENABLED: "false"
       STATE_DIR: /app/.state
-      HOME: /models
-      FASTEMBED_CACHE_PATH: /models
     volumes:
       - ./data/ramanujan:/app/.state
-      - model-cache:/models
 
   barramento:
     <<: *persona
@@ -118,25 +110,19 @@ services:
     environment:
       AGENT: pessoa
       RAG_ENABLED: "true"
-      RETRIEVAL: hybrid
+      RETRIEVAL: hybrid_api
+      EMBED_MODEL: baai/bge-m3
       CONTEXT_DIR: contexto/pessoa
       STATE_DIR: /app/.state
       INDEX_ON_START: "true"
       BARRAMENTO_ENABLED: "true"
       BARRAMENTO_URL: "http://barramento:8080"
-      HOME: /models
-      FASTEMBED_CACHE_PATH: /models
     volumes:
       - ./contexto/pessoa:/app/contexto/pessoa:ro
       - ./data/pessoa:/app/.state
-      - model-cache:/models
     networks:
       - default
       - agentes
-
-volumes:
-  model-cache:
-    name: persona-bots_model-cache
 
 networks:
   agentes:

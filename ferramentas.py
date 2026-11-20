@@ -170,20 +170,10 @@ def buscar(consulta: str, limite: int = 4) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Embeddings (fastembed/ONNX) e busca hibrida (BM25 + vetores via RRF)
+# Embeddings (OpenRouter) e busca hibrida (BM25 + vetores via RRF)
 # ---------------------------------------------------------------------------
 
-_EMB_CACHE = {"model": None, "vectors": None, "mtime": None}
-
-
-def _get_embedder():
-    if _EMB_CACHE["model"] is not None:
-        return _EMB_CACHE["model"]
-    from fastembed import TextEmbedding
-
-    _EMB_CACHE["model"] = TextEmbedding(model_name=EMBED_MODEL)
-    log.info("embedder carregado: %s", EMBED_MODEL)
-    return _EMB_CACHE["model"]
+_EMB_CACHE = {"vectors": None, "mtime": None}
 
 
 def _com_prefixo(textos: list[str], consulta: bool) -> list[str]:
@@ -192,16 +182,6 @@ def _com_prefixo(textos: list[str], consulta: bool) -> list[str]:
         p = "query: " if consulta else "passage: "
         return [p + t for t in textos]
     return textos
-
-
-def embed_textos(textos: list[str], consulta: bool = False):
-    import numpy as np
-
-    model = _get_embedder()
-    vecs = np.asarray(list(model.embed(_com_prefixo(textos, consulta))), dtype="float32")
-    normas = np.linalg.norm(vecs, axis=1, keepdims=True)
-    normas[normas == 0] = 1.0
-    return vecs / normas
 
 
 def _api_client():
@@ -239,7 +219,7 @@ def _gerar_com_retry(client, kwargs: dict, tentativas: int = 5):
 
 
 def embed_textos_api(textos: list[str], consulta: bool = False):
-    """Vetoriza via OpenRouter `/embeddings` (sem ONNX local).
+    """Vetoriza via OpenRouter `/embeddings`.
 
     Usa o mesmo modelo do indice; a query entra como `search_query` e os
     trechos como `search_document`. Requer `OPENROUTER_API_KEY`.
@@ -264,13 +244,6 @@ def embed_textos_api(textos: list[str], consulta: bool = False):
     normas = np.linalg.norm(vecs, axis=1, keepdims=True)
     normas[normas == 0] = 1.0
     return vecs / normas
-
-
-def embed_textos_modo(textos: list[str], consulta: bool = False):
-    """Escolhe o backend de embeddings conforme `RETRIEVAL`."""
-    if config.RETRIEVAL == "hybrid_api":
-        return embed_textos_api(textos, consulta=consulta)
-    return embed_textos(textos, consulta=consulta)
 
 
 def load_embeddings():
@@ -305,44 +278,6 @@ def _rrf(*listas: list[int]) -> dict:
         for rank, cid in enumerate(lista):
             scores[cid] = scores.get(cid, 0.0) + 1.0 / (_RRF_K + rank + 1)
     return scores
-
-
-def buscar_hibrido(consulta: str, limite: int = 4, k_bm25: int = 20) -> list[dict]:
-    """BM25 (top-k) + similaridade semantica, fundidos por RRF.
-
-    Sem embeddings (ou em caso de falha) cai no BM25 puro.
-    """
-    data = load_corpus()
-    chunks = data.get("chunks") or []
-    if not chunks:
-        return []
-
-    bm_ids = [cid for cid, _ in _bm25_cids(consulta, k_bm25)]
-
-    vec_ids: list = []
-    vecs, _meta = load_embeddings()
-    if vecs is not None and len(vecs) == len(chunks):
-        try:
-            import numpy as np
-
-            q = embed_textos([consulta], consulta=True)[0]
-            sims = np.asarray(vecs) @ q
-            k = min(k_bm25, len(sims))
-            vec_ids = list(np.argsort(-sims)[:k])
-        except Exception as e:
-            log.warning("busca vetorial falhou, usando BM25: %r", e)
-            vec_ids = []
-
-    if not vec_ids:
-        ids = bm_ids[:limite]
-    else:
-        fused = _rrf(bm_ids, vec_ids)
-        ids = [
-            cid
-            for cid, _ in sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[:limite]
-        ]
-
-    return [{"livro": chunks[cid]["livro"], "texto": chunks[cid]["texto"]} for cid in ids]
 
 
 def buscar_hibrido_api(consulta: str, limite: int = 4, k_bm25: int = 20) -> list[dict]:
@@ -407,10 +342,8 @@ def consultar_contexto(args, context=None) -> str:
     limite = int(args.get("limite") or 4)
     if config.RETRIEVAL == "bm25":
         trechos = buscar(consulta, limite)
-    elif config.RETRIEVAL == "hybrid_api":
-        trechos = buscar_hibrido_api(consulta, limite)
     else:
-        trechos = buscar_hibrido(consulta, limite)
+        trechos = buscar_hibrido_api(consulta, limite)
     log.info("consultar_contexto(%r) -> %d trechos", consulta, len(trechos))
     if not trechos:
         return json.dumps(

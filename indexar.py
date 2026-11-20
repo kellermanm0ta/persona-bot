@@ -188,8 +188,7 @@ def build():
     print(f"corpus: {OUT} | trechos={len(chunks)} termos={len(df)} | {size} bytes")
 
     if config.RETRIEVAL == "bm25":
-        # Sem vetores: evita baixar/carregar o ONNX do fastembed (crucial em hosts
-        # com pouca RAM, como a VPS). A busca em ferramentas cai no BM25 puro.
+        # Indice BM25 apenas: pula a geracao de embeddings (nao gasta API).
         log.info("RETRIEVAL=bm25: pulando embeddings (indice BM25 apenas)")
         print("embeddings: pulados (RETRIEVAL=bm25)")
         return
@@ -198,7 +197,7 @@ def build():
 
 
 def gerar_embeddings(chunks: list) -> None:
-    """Gera e grava os vetores (fastembed/ONNX) dos trechos. Nao-fatal se falhar."""
+    """Gera e grava os vetores (OpenRouter `/embeddings`) dos trechos. Nao-fatal se falhar."""
     import time
 
     import numpy as np
@@ -206,7 +205,7 @@ def gerar_embeddings(chunks: list) -> None:
     textos = [c["texto"] for c in chunks]
     t0 = time.time()
     try:
-        vecs = ferramentas.embed_textos_modo(textos, consulta=False)
+        vecs = ferramentas.embed_textos_api(textos, consulta=False)
     except Exception as e:
         log.warning("embeddings indisponiveis (%r); indice BM25 segue valido", e)
         print("embeddings: falhou (BM25 continua funcionando)")

@@ -50,14 +50,11 @@ def _int_set(name: str) -> set[int]:
 
 AGENT = os.environ.get("AGENT", "bukowski").strip() or "bukowski"
 RAG_ENABLED = _flag("RAG_ENABLED", False)
-# bm25 | hybrid (fastembed local) | hybrid_api (embeddings via OpenRouter)
-RETRIEVAL = os.environ.get("RETRIEVAL", "hybrid").strip().lower() or "hybrid"
-# Modelo local (fastembed) em `hybrid`; id do modelo OpenRouter em `hybrid_api`.
-EMBED_MODEL = os.environ.get(
-    "EMBED_MODEL",
-    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-).strip()
-# Quantos textos por requisicao de embeddings (so em `hybrid_api`).
+# bm25 (lexical) | hybrid_api (BM25 + embeddings via OpenRouter)
+RETRIEVAL = os.environ.get("RETRIEVAL", "bm25").strip().lower() or "bm25"
+# Id do modelo de embeddings na OpenRouter (usado em `hybrid_api` e no indice).
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "baai/bge-m3").strip()
+# Quantos textos por requisicao de embeddings.
 EMBED_BATCH = int(os.environ.get("EMBED_BATCH", "32") or "32")
 # Opcional: forca a dimensao do vetor (modelos Matryoshka).
 _EMBED_DIM = os.environ.get("EMBED_DIM", "").strip()

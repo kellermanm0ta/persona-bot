@@ -16,7 +16,7 @@ flowchart LR
     RT -.->|"tool consultar_contexto<br/>(se RAG_ENABLED)"| FER["ferramentas.py"]
     FER --> CORP[("STATE_DIR/corpus.json")]
     FER --> EMB[("STATE_DIR/embeddings.npy")]
-    IDX["indexar.py<br/>pdftotext + fastembed"] --> CORP
+    IDX["indexar.py<br/>pdftotext + embeddings"] --> CORP
     IDX --> EMB
     CTX[("CONTEXT_DIR/*.pdf|*.txt")] --> IDX
 ```
@@ -34,16 +34,15 @@ frontmatter and injects a non-interactive output contract at call time.
 | `RAG_ENABLED` | `true` registers the `consultar_contexto` tool | `false` |
 | `CONTEXT_DIR` | PDFs/TXTs to index | `contexto/<AGENT>` |
 | `STATE_DIR` | corpus/embeddings/sessions | `data/<AGENT>` |
-| `RETRIEVAL` | `bm25` \| `hybrid` (local) \| `hybrid_api` (OpenRouter) | `hybrid` |
-| `EMBED_MODEL` | fastembed model (`hybrid`) ou id OpenRouter (`hybrid_api`) | `.../paraphrase-multilingual-MiniLM-L12-v2` |
-| `EMBED_BATCH` | textos por requisição de embeddings (`hybrid_api`) | `32` |
+| `RETRIEVAL` | `bm25` (lexical) \| `hybrid_api` (BM25 + embeddings via OpenRouter) | `bm25` |
+| `EMBED_MODEL` | id do modelo de embeddings na OpenRouter | `baai/bge-m3` |
+| `EMBED_BATCH` | textos por requisição de embeddings | `32` |
 | `EMBED_DIM` | dimensão forçada do vetor (modelos Matryoshka) | — |
 | `OPENROUTER_MODEL` / `OPENROUTER_MODEL_<AGENT>` | model override | persona frontmatter |
 | `MAX_HISTORY` | messages kept per chat | `12` |
 | `INDEX_ON_START` | index at container start if missing | `true` |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_IDS` | secret (env_file) | — |
 | `OPENROUTER_API_KEY` | secret (`.secrets/openrouter.env`) | — |
-| `FASTEMBED_CACHE_PATH` | model cache dir (mounted volume) | fastembed's default |
 | `BARRAMENTO_ENABLED` | liga a ponte HTTP no bot | `false` |
 | `BARRAMENTO_URL` | hub na rede Docker | `http://barramento:8080` |
 | `BARRAMENTO_POLL_TIMEOUT` | long-poll do cliente | `25` |
@@ -111,16 +110,15 @@ Everything is Python in the repo root. Host runs use the dedicated venv:
 - `runtime.py` — `responder(mensagem, historico, instrucao_extra=None)`; registra
   `consultar_contexto` só quando `RAG_ENABLED`.
 - `ferramentas.py` — `consultar_contexto` (the only tool). `RETRIEVAL=bm25` → `buscar()`
-  (lexical). `hybrid` → `buscar_hibrido()` = BM25 + cosine over local `fastembed`
-  embeddings (ONNX), fused by RRF. `hybrid_api` → `buscar_hibrido_api()` = BM25 +
-  cosine, mas a **query** é vetorizada pela OpenRouter (`embed_textos_api`, sem ONNX);
-  exige `embeddings.npy` do mesmo `EMBED_MODEL` (confere `index_meta.json`). Ambos caem
-  no BM25 se os vetores faltarem ou a API falhar. Também `tokenize`/`limpar_texto`.
+  (lexical). `hybrid_api` → `buscar_hibrido_api()` = BM25 + cosine, com a **query**
+  vetorizada pela OpenRouter (`embed_textos_api`, com retry/backoff); exige
+  `embeddings.npy` do mesmo `EMBED_MODEL` (confere `index_meta.json`). Cai no BM25 se os
+  vetores faltarem ou a API falhar. Também `tokenize`/`limpar_texto`.
 - `indexar.py` — PDFs via `pdftotext -layout` (ou `.txt` direto) → clean → chunk (~900 chars)
   → `STATE_DIR/corpus.json` + `STATE_DIR/embeddings.npy` + `index_meta.json`. **Re-run after
   adding/changing files.** Titles come from `CONTEXT_DIR/titulos.json` (optional), else the
   filename. Com `RETRIEVAL=bm25` pula os embeddings; com `hybrid_api` gera-os pela API
-  (em lotes, sem ONNX).
+  (em lotes).
 - `coletar_arquivo_pessoa.py` — coletor/curador do Arquivo Pessoa (host, opcional): gera
   `contexto/pessoa/*.txt` + `titulos.json` + `manifesto.json` a partir de
   `http://arquivopessoa.net/`. Cache de HTML em `data/pessoa/cache_html`.
@@ -136,7 +134,7 @@ Everything is Python in the repo root. Host runs use the dedicated venv:
 
 - deps: `./.venv/bin/pip install -r requirements-bot.txt`. **The pins matter** — newer
   `openrouter` breaks `openrouter-agent-sdk` (`openrouter==1.1.0`,
-  `openrouter-agent-sdk==0.8.0`). `fastembed` pulls ONNX (no torch).
+  `openrouter-agent-sdk==0.8.0`).
 - Start: `nohup ./run_bot.sh >/dev/null 2>&1 </dev/null &` (defaults `AGENT=bukowski`,
   `RAG_ENABLED=true`, `STATE_DIR=data/<AGENT>`, `CONTEXT_DIR=contexto/<AGENT>`).
 - Stop: `kill "$(cat data/<AGENT>/bot.pid)"` (up to ~25 s; `kill -9` if needed).
@@ -156,17 +154,16 @@ Everything is Python in the repo root. Host runs use the dedicated venv:
 - `docker-compose.yml` — `x-persona` anchor; one service per persona. Non-secret config
   in `environment`, secrets via `env_file` (shared `./.secrets/openrouter.env`,
   per-persona `telegram.env` e `barramento.env` nos bots da ponte), content/state via
-  volumes. `model-cache` is a shared named volume (`FASTEMBED_CACHE_PATH=/models`) so the
-  embedding model downloads once.
+  volumes. Bots com RAG usam `RETRIEVAL=hybrid_api` (embeddings pela OpenRouter).
 - `barramento` — the inter-agent hub (same image, `entrypoint` = `barramento.py`), on the
   internal `agentes` network, with `./data/barramento` for the JSONL log. Bots da ponte
   também entram em `agentes`; the hub has no published ports and no internet.
-- First launch of a RAG persona downloads the embedding model (~0.2 GB) and indexes the
-  context; later starts reuse `data/<persona>` and the cache.
+- First launch of a RAG persona sem indice gera `corpus.json` + `embeddings.npy` (pela
+  API); later starts reuse `data/<persona>`.
 - `docker-compose.prod.yml` — VPS variant: `image: ghcr.io/kellermanm0ta/persona-bot:${TAG:-latest}`
   (no `build`), only `bukowski` + `pessoa` + `barramento`, env `RETRIEVAL=hybrid_api`,
   `EMBED_MODEL=baai/bge-m3` e `INDEX_ON_START=false` (indice `corpus.json` +
-  `embeddings.npy` provisionados no host). Sem `model-cache`. See README "Deploy" for
+  `embeddings.npy` provisionados no host). See README "Deploy" for
   CI/CD, GitHub Secrets and VPS setup.
 
 ## Verification (no test suite)
@@ -200,7 +197,6 @@ invoked the tool (`call_model ... tools=1`).
   `corpus.json`/`embeddings.npy` (they contain verbatim excerpts).
 - Keep `.secrets/`, `data/`, `.venv/` out of version control; never commit the
   API key or bot tokens.
-- Memória do RAG (medida por processo): híbrido local (fastembed/ONNX) ~670–690 MB;
-  `hybrid_api` ~75–105 MB; `bm25` ~90–120 MB; persona sem RAG ~60 MB. Em hosts pequenos
-  (a VPS tem 1,6 GB, compartilhados com o `agenda`), use `hybrid_api` (semântica sem
-  ONNX) ou `bm25`.
+- Memória do RAG (medida por processo): `hybrid_api` ~60–105 MB; `bm25` ~30–60 MB;
+  persona sem RAG ~60 MB. A imagem não tem `fastembed`/ONNX (sem download de modelo);
+  em hosts pequenos (a VPS tem 1,6 GB, compartilhados com o `agenda`) fica folgado.

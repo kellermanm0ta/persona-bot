@@ -20,8 +20,8 @@ telegram_bot.py -> runtime.py -> OpenRouter (openrouter-agent-sdk)
 - `config.py` lê tudo do ambiente (`AGENT`, `RAG_ENABLED`, `CONTEXT_DIR`, …).
 - Se `RAG_ENABLED=false`, o bot é só persona (sem corpus, sem tool).
 - `indexar.py` gera o índice BM25 e os embeddings a partir dos PDFs/TXTs de `CONTEXT_DIR`.
-- `RETRIEVAL` escolhe o backend: `bm25` (lexical), `hybrid` (embeddings locais via
-  `fastembed`/ONNX) ou `hybrid_api` (embeddings pela OpenRouter — só a query em runtime).
+- `RETRIEVAL` escolhe o backend: `bm25` (lexical) ou `hybrid_api` (BM25 + embeddings
+  pela OpenRouter — só a query em runtime; sem ONNX local).
 
 ## Comunicação entre agentes (ponte)
 
@@ -89,8 +89,8 @@ docker compose logs -f bukowski
 docker compose logs -f barramento   # se usar a ponte
 ```
 
-Na primeira subida de uma persona com RAG, o container baixa o modelo de embeddings
-(~0,2 GB) e indexa o contexto; depois reaproveita `data/<persona>` e o cache.
+Na primeira subida de uma persona com RAG e sem índice em `data/<persona>`, o container
+gera o índice (BM25 + embeddings pela OpenRouter); depois reaproveita os arquivos.
 
 ## Deploy (GitHub Actions → GHCR → VPS)
 
@@ -102,7 +102,7 @@ ponte); buda/ramanujan continuam só no `docker-compose.yml` de desenvolvimento.
 
 RAG em **híbrido com embeddings via API** (`RETRIEVAL=hybrid_api`): os trechos vêm do
 `embeddings.npy` local e só a **query** é vetorizada pela OpenRouter — sem
-`fastembed`/ONNX no runtime (~100 MB por bot, contra ~690 MB no híbrido local). O
+`fastembed`/ONNX no runtime (~100 MB por bot). O
 modelo é o `EMBED_MODEL` (default `baai/bge-m3`); o `indexar.py` gera os vetores por
 API, então o índice (`corpus.json` + `embeddings.npy` + `index_meta.json`) é
 provisionado na VPS. Se a API falhar, a busca cai no BM25.
@@ -186,11 +186,10 @@ nos bots; sem o hub, eles respondem direto.
 
 ## Configuração (environment)
 
-`AGENT`, `RAG_ENABLED`, `CONTEXT_DIR`, `STATE_DIR`, `RETRIEVAL`
-(`bm25`|`hybrid`|`hybrid_api`), `EMBED_MODEL` (fastembed em `hybrid`, id OpenRouter em
-`hybrid_api`), `EMBED_BATCH`, `EMBED_DIM`, `OPENROUTER_MODEL`, `MAX_HISTORY`,
-`INDEX_ON_START`, `BARRAMENTO_ENABLED`, `BARRAMENTO_URL`, `BARRAMENTO_CHAT_IDS` —
-detalhes e defaults em `AGENTS.md`.
+`AGENT`, `RAG_ENABLED`, `CONTEXT_DIR`, `STATE_DIR`, `RETRIEVAL` (`bm25`|`hybrid_api`),
+`EMBED_MODEL` (id OpenRouter, ex. `baai/bge-m3`), `EMBED_BATCH`, `EMBED_DIM`,
+`OPENROUTER_MODEL`, `MAX_HISTORY`, `INDEX_ON_START`, `BARRAMENTO_ENABLED`,
+`BARRAMENTO_URL`, `BARRAMENTO_CHAT_IDS` — detalhes e defaults em `AGENTS.md`.
 
 ## Aviso
 

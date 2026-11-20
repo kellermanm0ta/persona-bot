@@ -12,9 +12,8 @@
 # Rollback: editar TAG no .env (sha anterior) e repetir up -d.
 #
 # RAG hibrido com embeddings via OpenRouter (`RETRIEVAL=hybrid_api`): os trechos
-# vem do `embeddings.npy` local e so a query e vetorizada pela API — sem
-# fastembed/ONNX no runtime (~100 MB por bot). O indice (`corpus.json` +
-# `embeddings.npy`) ja vem pronto da VPS; nao ha `model-cache`.
+# vem do `embeddings.npy` local e so a query e vetorizada pela API (~100 MB por
+# bot). O indice (`corpus.json` + `embeddings.npy`) ja vem pronto da VPS.
 name: persona-bots
 
 x-persona: &persona

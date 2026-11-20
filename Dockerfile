@@ -16,7 +16,7 @@ COPY .opencode/agent ./.opencode/agent
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 
 RUN chmod +x /app/docker-entrypoint.sh \
- && mkdir -p /app/contexto /app/.state /models \
- && chown -R 1000:1000 /app /models
+ && mkdir -p /app/contexto /app/.state \
+ && chown -R 1000:1000 /app
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
