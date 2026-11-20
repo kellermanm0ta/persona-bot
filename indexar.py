@@ -187,6 +187,13 @@ def build():
     log.info("corpus gravado: %d trechos, %d termos, %.1f MB", len(chunks), len(df), size / 1048576)
     print(f"corpus: {OUT} | trechos={len(chunks)} termos={len(df)} | {size} bytes")
 
+    if config.RETRIEVAL == "bm25":
+        # Sem vetores: evita baixar/carregar o ONNX do fastembed (crucial em hosts
+        # com pouca RAM, como a VPS). A busca em ferramentas cai no BM25 puro.
+        log.info("RETRIEVAL=bm25: pulando embeddings (indice BM25 apenas)")
+        print("embeddings: pulados (RETRIEVAL=bm25)")
+        return
+
     gerar_embeddings(chunks)
 
 

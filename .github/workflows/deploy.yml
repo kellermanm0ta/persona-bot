@@ -1,0 +1,178 @@
+name: deploy
+
+# Deploy automatico apos um `publish` bem-sucedido na main.
+# `workflow_dispatch` permite redeploy manual/rollback escolhendo a tag.
+on:
+  workflow_run:
+    workflows: [publish]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Imagem em ghcr.io (ex: sha-ab12cd3). Vazio = latest."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# Nunca dois deploys ao mesmo tempo (os bots usam long-poll com token unico).
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolver tag da imagem
+        id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ -n "${INPUT_TAG:-}" ]; then
+            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+          elif [ -n "${RUN_SHA:-}" ]; then
+            echo "tag=sha-${RUN_SHA::7}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validar segredos
+        # Evita falha silenciosa: sem token o bot nem sobe; sem a chave os bots
+        # sobem mas a OpenRouter recusa. Tambem pega o caso "secret contem caminho".
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          BUKOWSKI_TELEGRAM_BOT_TOKEN: ${{ secrets.BUKOWSKI_TELEGRAM_BOT_TOKEN }}
+          PESSOA_TELEGRAM_BOT_TOKEN: ${{ secrets.PESSOA_TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALLOWED_USER_IDS: ${{ secrets.TELEGRAM_ALLOWED_USER_IDS }}
+          BARRAMENTO_TOKEN: ${{ secrets.BARRAMENTO_TOKEN }}
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+
+          [ -n "$OPENROUTER_API_KEY" ] || fail "OPENROUTER_API_KEY vazio"
+          case "$OPENROUTER_API_KEY" in
+            /*|~*) fail "OPENROUTER_API_KEY parece caminho de arquivo, nao chave" ;;
+            */*)  fail "OPENROUTER_API_KEY contem '/': provavelmente um caminho" ;;
+          esac
+          case "$OPENROUTER_API_KEY" in
+            *[[:space:]]*) fail "OPENROUTER_API_KEY contem espaco ou quebra de linha" ;;
+          esac
+          [ "${#OPENROUTER_API_KEY}" -ge 20 ] || fail "OPENROUTER_API_KEY curta demais"
+          case "$OPENROUTER_API_KEY" in
+            sk-or-v1-*) ;;
+            *) echo "::warning::OPENROUTER_API_KEY sem o prefixo sk-or-v1-" ;;
+          esac
+
+          for pair in "BUKOWSKI:$BUKOWSKI_TELEGRAM_BOT_TOKEN" "PESSOA:$PESSOA_TELEGRAM_BOT_TOKEN"; do
+            nome="${pair%%:*}"; valor="${pair#*:}"
+            [[ "$valor" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]] \
+              || fail "TELEGRAM_BOT_TOKEN de $nome fora do formato <id>:<token>"
+            [ -n "$valor" ] || fail "TELEGRAM_BOT_TOKEN de $nome vazio"
+          done
+
+          [ -n "$TELEGRAM_ALLOWED_USER_IDS" ] || fail "TELEGRAM_ALLOWED_USER_IDS vazio"
+          [[ "$TELEGRAM_ALLOWED_USER_IDS" =~ ^[0-9]+([,[:space:]]+[0-9]+)*$ ]] \
+            || fail "TELEGRAM_ALLOWED_USER_IDS deve conter apenas ids numericos"
+
+          [ -n "$BARRAMENTO_TOKEN" ] || fail "BARRAMENTO_TOKEN vazio"
+
+          # Fingerprints (nunca o valor) para conferir rotacao no log
+          echo "OPENROUTER_API_KEY: ${#OPENROUTER_API_KEY} chars, sha256 $(printf %s "$OPENROUTER_API_KEY" | sha256sum | cut -c1-8)"
+          echo "BUKOWSKI_TELEGRAM_BOT_TOKEN: ${#BUKOWSKI_TELEGRAM_BOT_TOKEN} chars, sha256 $(printf %s "$BUKOWSKI_TELEGRAM_BOT_TOKEN" | sha256sum | cut -c1-8)"
+          echo "PESSOA_TELEGRAM_BOT_TOKEN: ${#PESSOA_TELEGRAM_BOT_TOKEN} chars, sha256 $(printf %s "$PESSOA_TELEGRAM_BOT_TOKEN" | sha256sum | cut -c1-8)"
+          echo "TELEGRAM_ALLOWED_USER_IDS: $(printf %s "$TELEGRAM_ALLOWED_USER_IDS" | tr -cd ',' | wc -c) separador(es)"
+
+      - name: Render .secrets a partir dos GitHub Secrets
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          BUKOWSKI_TELEGRAM_BOT_TOKEN: ${{ secrets.BUKOWSKI_TELEGRAM_BOT_TOKEN }}
+          PESSOA_TELEGRAM_BOT_TOKEN: ${{ secrets.PESSOA_TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALLOWED_USER_IDS: ${{ secrets.TELEGRAM_ALLOWED_USER_IDS }}
+          BARRAMENTO_TOKEN: ${{ secrets.BARRAMENTO_TOKEN }}
+          BARRAMENTO_CHAT_IDS: ${{ secrets.BARRAMENTO_CHAT_IDS }}
+        run: |
+          umask 077
+          mkdir -p .secrets/bukowski .secrets/pessoa
+          printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" > .secrets/openrouter.env
+          {
+            printf 'TELEGRAM_BOT_TOKEN=%s\n' "$BUKOWSKI_TELEGRAM_BOT_TOKEN"
+            printf 'TELEGRAM_ALLOWED_USER_IDS=%s\n' "$TELEGRAM_ALLOWED_USER_IDS"
+          } > .secrets/bukowski/telegram.env
+          {
+            printf 'TELEGRAM_BOT_TOKEN=%s\n' "$PESSOA_TELEGRAM_BOT_TOKEN"
+            printf 'TELEGRAM_ALLOWED_USER_IDS=%s\n' "$TELEGRAM_ALLOWED_USER_IDS"
+          } > .secrets/pessoa/telegram.env
+          {
+            printf 'BARRAMENTO_TOKEN=%s\n' "$BARRAMENTO_TOKEN"
+            printf 'BARRAMENTO_CHAT_IDS=%s\n' "$BARRAMENTO_CHAT_IDS"
+          } > .secrets/barramento.env
+
+      - name: Empacotar compose + secrets
+        # Sem umask 077 aqui: o scp-action roda em container com outro UID e
+        # precisa ler o arquivo. A restricao de permissao e feita na VPS.
+        run: tar -czf deploy.tgz docker-compose.prod.yml .secrets
+
+      - name: Enviar para a VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          source: deploy.tgz
+          target: /home/${{ secrets.VPS_USER }}/persona-bots
+
+      - name: Deploy na VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            set -euo pipefail
+            umask 077
+            cd ~/persona-bots
+            mkdir -p data/bukowski data/pessoa data/barramento
+            chmod 600 deploy.tgz
+            tar -xzf deploy.tgz
+            rm -f deploy.tgz
+            chmod 700 .secrets
+            chmod 700 .secrets/bukowski .secrets/pessoa
+            chmod 600 .secrets/openrouter.env \
+                      .secrets/bukowski/telegram.env \
+                      .secrets/pessoa/telegram.env \
+                      .secrets/barramento.env
+            printf 'TAG=%s\n' '${{ steps.tag.outputs.tag }}' > .env
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d --force-recreate
+            docker image prune -af \
+              --filter "label=org.opencontainers.image.source=https://github.com/kellermanm0ta/persona-bot"
+            sleep 3
+            docker compose -f docker-compose.prod.yml ps
+            # So as linhas de inicializacao/erro: o log da Actions e publico e o
+            # log cru do container pode conter falas das personas.
+            docker compose -f docker-compose.prod.yml logs --tail=200 2>&1 \
+              | grep -E "iniciado|barramento em|ERROR" | tail -8 || true
+
+            espera() { # $1 = servico, $2 = padrao no log
+              for _ in 1 2 3 4 5 6 7 8 9 10; do
+                logs="$(docker compose -f docker-compose.prod.yml logs --tail=120 "$1" 2>&1 || true)"
+                case "$logs" in *"$2"*) return 0 ;; esac
+                sleep 2
+              done
+              return 1
+            }
+            espera barramento "barramento em :8080" \
+              || { echo "health check falhou: barramento nao iniciou"; exit 1; }
+            espera bukowski "iniciado" \
+              || { echo "health check falhou: bukowski nao iniciou"; exit 1; }
+            espera pessoa "iniciado" \
+              || { echo "health check falhou: pessoa nao iniciou"; exit 1; }
+            echo "deploy ok"

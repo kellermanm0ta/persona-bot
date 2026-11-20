@@ -1,0 +1,22 @@
+name: retention
+
+# Higiene do GHCR: mantem as N versoes mais recentes e preserva `latest`.
+# Pacote publico nao tem custo, mas evitar acumulo de tags e boa pratica.
+on:
+  schedule:
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/delete-package-versions@v5
+        with:
+          package-name: persona-bot
+          package-type: container
+          min-versions-to-keep: 10
+          ignore-versions: "^latest$"

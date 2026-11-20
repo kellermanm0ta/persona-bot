@@ -1,0 +1,64 @@
+name: ci
+
+# Valida branches de trabalho e PRs. A `main` e validada pelo `publish`
+# (que tambem faz o build da imagem).
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --no-cache-dir -r requirements-bot.txt
+      - name: Compilar
+        run: python -m compileall -q .
+      - name: Smoke test (sem rede)
+        run: |
+          python - <<'PY'
+          import os
+          import tempfile
+          os.environ["AGENT"] = "bukowski"   # independe de AGENT no ambiente
+          os.environ["STATE_DIR"] = os.path.join(tempfile.mkdtemp(), "state")
+
+          import ferramentas
+          import runtime
+          import barramento
+          import cliente_barramento
+          import telegram_bot
+
+          # tokenizacao/limpeza nao dependem de indice
+          toks = ferramentas.tokenize("A vida miseravel na cidade grande")
+          assert "vida" in toks and "cidade" in toks, toks
+          assert "na" not in toks and "a" not in toks, toks  # stopwords
+
+          # sem corpus no STATE_DIR, a busca degrada para vazio (nao quebra)
+          assert ferramentas.buscar("qualquer coisa", 4) == []
+
+          # a persona e lida do disco, sem rede
+          agent = runtime.load_agent("bukowski")
+          assert agent["prompt"], "prompt da persona vazio"
+          assert runtime.bot_name(), "bot_name vazio"
+          print("smoke ok")
+          PY
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build (sem push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

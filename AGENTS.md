@@ -90,6 +90,8 @@ contexto/<persona>/*.pdf|*.txt    context (optional); `titulos.json` maps file -
 .secrets/barramento.env          shared token for the internal hub
 data/<persona>/                  STATE_DIR (sessions, corpus, embeddings)
 data/barramento/eventos.jsonl    JSONL log of the inter-agent hub
+docker-compose.prod.yml          VPS deploy: GHCR image, no build (bm25 + hub)
+.github/workflows/               ci, publish (GHCR), deploy (SSH), retention
 ```
 
 `contexto/` is gitignored, so a persona's `titulos.json` is **local only** — recreate it
@@ -112,7 +114,7 @@ Everything is Python in the repo root. Host runs use the dedicated venv:
 - `indexar.py` — PDFs via `pdftotext -layout` (ou `.txt` direto) → clean → chunk (~900 chars)
   → `STATE_DIR/corpus.json` + `STATE_DIR/embeddings.npy` + `index_meta.json`. **Re-run after
   adding/changing files.** Titles come from `CONTEXT_DIR/titulos.json` (optional), else the
-  filename.
+  filename. Com `RETRIEVAL=bm25` pula os embeddings (não baixa/carrega o ONNX).
 - `coletar_arquivo_pessoa.py` — coletor/curador do Arquivo Pessoa (host, opcional): gera
   `contexto/pessoa/*.txt` + `titulos.json` + `manifesto.json` a partir de
   `http://arquivopessoa.net/`. Cache de HTML em `data/pessoa/cache_html`.
@@ -155,6 +157,10 @@ Everything is Python in the repo root. Host runs use the dedicated venv:
   também entram em `agentes`; the hub has no published ports and no internet.
 - First launch of a RAG persona downloads the embedding model (~0.2 GB) and indexes the
   context; later starts reuse `data/<persona>` and the cache.
+- `docker-compose.prod.yml` — VPS variant: `image: ghcr.io/kellermanm0ta/persona-bot:${TAG:-latest}`
+  (no `build`), only `bukowski` + `pessoa` + `barramento`, env `RETRIEVAL=bm25` e
+  `INDEX_ON_START=false` (indice `corpus.json` provisionado no host). Sem `model-cache`.
+  See README "Deploy" for CI/CD, GitHub Secrets and VPS setup.
 
 ## Verification (no test suite)
 
@@ -187,3 +193,6 @@ invoked the tool (`call_model ... tools=1`).
   `corpus.json`/`embeddings.npy` (they contain verbatim excerpts).
 - Keep `.secrets/`, `data/`, `.venv/` out of version control; never commit the
   API key or bot tokens.
+- Memória do RAG (medida por processo): híbrido (fastembed/ONNX) ~670–690 MB; `RETRIEVAL=bm25`
+  ~90–120 MB (o `fastembed` não é importado); persona sem RAG ~60 MB. Em hosts pequenos
+  (a VPS tem 1,6 GB, compartilhados com o `agenda`), use `RETRIEVAL=bm25`.

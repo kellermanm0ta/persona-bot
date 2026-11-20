@@ -90,6 +90,67 @@ docker compose logs -f barramento   # se usar a ponte
 Na primeira subida de uma persona com RAG, o container baixa o modelo de embeddings
 (~0,2 GB) e indexa o contexto; depois reaproveita `data/<persona>` e o cache.
 
+## Deploy (GitHub Actions → GHCR → VPS)
+
+Pipeline: `push main` → **ci** valida → **publish** publica
+`ghcr.io/kellermanm0ta/persona-bot:{latest,sha-xxxx}` → **deploy** puxa e sobe na VPS
+(`inter-server-vps`) por SSH. O pacote é **público**, então a VPS não autentica no
+registry. Serviços publicados: **bukowski**, **pessoa** e **barramento** (o hub da
+ponte); buda/ramanujan continuam só no `docker-compose.yml` de desenvolvimento.
+
+RAG em **BM25** (`RETRIEVAL=bm25`): os bots não carregam o `fastembed`/ONNX no runtime
+(~90–120 MB por bot, contra ~690 MB no híbrido), o que cabe nos 1,6 GB da VPS junto do
+`agenda`. O `indexar.py` pula os embeddings quando `RETRIEVAL=bm25`, e o índice
+(`corpus.json`, sem `.npy`) é provisionado na VPS.
+
+Segredos (GitHub → Settings → Secrets and variables → Actions):
+
+| Secret | Uso |
+|---|---|
+| `BUKOWSKI_TELEGRAM_BOT_TOKEN`, `PESSOA_TELEGRAM_BOT_TOKEN` | `.secrets/<persona>/telegram.env` |
+| `TELEGRAM_ALLOWED_USER_IDS` | idem (lista compartilhada) |
+| `OPENROUTER_API_KEY` | chave **exclusiva** do projeto → `.secrets/openrouter.env` |
+| `BARRAMENTO_TOKEN`, `BARRAMENTO_CHAT_IDS` | `.secrets/barramento.env` |
+| `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY` | acesso SSH (`VPS_PORT` opcional) |
+
+### Setup da VPS (uma vez)
+
+Pré-requisitos: usuário no grupo `docker`, Docker Engine + compose v2, chave SSH. O
+`contexto/` (copyright) e o `corpus.json` **não** vão pela CI — copie do host uma vez:
+
+```bash
+ssh inter-server-vps 'mkdir -p ~/persona-bots/{data/bukowski,data/pessoa,data/barramento,.secrets/bukowski,.secrets/pessoa,contexto/{bukowski,pessoa}}'
+
+rsync -a contexto/bukowski/ inter-server-vps:~/persona-bots/contexto/bukowski/
+rsync -a contexto/pessoa/   inter-server-vps:~/persona-bots/contexto/pessoa/
+scp data/bukowski/corpus.json inter-server-vps:~/persona-bots/data/bukowski/
+scp data/pessoa/corpus.json   inter-server-vps:~/persona-bots/data/pessoa/
+```
+
+Para regenerar o `corpus.json` localmente (sem embeddings):
+`RETRIEVAL=bm25 ./.venv/bin/python indexar.py`.
+
+Primeiro deploy: rode o pipeline. Se o `pull` na VPS falhar com `401`, torne o pacote
+público (GitHub → Packages → persona-bot → Package settings).
+
+Rollback: Actions → **deploy** → Run workflow, informando `tag` (ex: `sha-ab12cd3`).
+
+### Rotação de chave (OpenRouter)
+
+O `.secrets` na VPS é cópia derivada dos GitHub Secrets — o deploy o reescreve a cada
+run. Rotacione pelo secret, não editando o arquivo na VPS:
+
+```bash
+gh secret set OPENROUTER_API_KEY -R kellermanm0ta/persona-bot   # cole o valor puro
+gh workflow run deploy.yml -R kellermanm0ta/persona-bot
+```
+
+O passo **Validar segredos** imprime só o fingerprint (`sha256` curto) e aborta antes do
+SSH se a chave vier vazia, como caminho (`/...`, `~/...`) ou curta demais.
+
+> ⚠️ Nunca rode a mesma persona no host **e** na VPS com o mesmo token: o Telegram
+> devolve `409 Conflict`. Pare uma instância antes de subir a outra.
+
 ## Rodar no host (sem Docker)
 
 Requer `pdftotext` (poppler-utils) e a venv dedicada.
