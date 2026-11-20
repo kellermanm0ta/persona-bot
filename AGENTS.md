@@ -34,8 +34,10 @@ frontmatter and injects a non-interactive output contract at call time.
 | `RAG_ENABLED` | `true` registers the `consultar_contexto` tool | `false` |
 | `CONTEXT_DIR` | PDFs/TXTs to index | `contexto/<AGENT>` |
 | `STATE_DIR` | corpus/embeddings/sessions | `data/<AGENT>` |
-| `RETRIEVAL` | `hybrid` \| `bm25` | `hybrid` |
-| `EMBED_MODEL` | fastembed model | `.../paraphrase-multilingual-MiniLM-L12-v2` |
+| `RETRIEVAL` | `bm25` \| `hybrid` (local) \| `hybrid_api` (OpenRouter) | `hybrid` |
+| `EMBED_MODEL` | fastembed model (`hybrid`) ou id OpenRouter (`hybrid_api`) | `.../paraphrase-multilingual-MiniLM-L12-v2` |
+| `EMBED_BATCH` | textos por requisição de embeddings (`hybrid_api`) | `32` |
+| `EMBED_DIM` | dimensão forçada do vetor (modelos Matryoshka) | — |
 | `OPENROUTER_MODEL` / `OPENROUTER_MODEL_<AGENT>` | model override | persona frontmatter |
 | `MAX_HISTORY` | messages kept per chat | `12` |
 | `INDEX_ON_START` | index at container start if missing | `true` |
@@ -108,13 +110,17 @@ Everything is Python in the repo root. Host runs use the dedicated venv:
   e `/contexto` (só quando `RAG_ENABLED`); per-chat history in `STATE_DIR/sessions.json`.
 - `runtime.py` — `responder(mensagem, historico, instrucao_extra=None)`; registra
   `consultar_contexto` só quando `RAG_ENABLED`.
-- `ferramentas.py` — `consultar_contexto` (the only tool); `buscar_hibrido()` = BM25 +
-  cosine over local `fastembed` embeddings, fused by RRF; falls back to BM25 if vectors
-  are missing. `RETRIEVAL=bm25` skips vectors. Also `tokenize`/`limpar_texto`.
+- `ferramentas.py` — `consultar_contexto` (the only tool). `RETRIEVAL=bm25` → `buscar()`
+  (lexical). `hybrid` → `buscar_hibrido()` = BM25 + cosine over local `fastembed`
+  embeddings (ONNX), fused by RRF. `hybrid_api` → `buscar_hibrido_api()` = BM25 +
+  cosine, mas a **query** é vetorizada pela OpenRouter (`embed_textos_api`, sem ONNX);
+  exige `embeddings.npy` do mesmo `EMBED_MODEL` (confere `index_meta.json`). Ambos caem
+  no BM25 se os vetores faltarem ou a API falhar. Também `tokenize`/`limpar_texto`.
 - `indexar.py` — PDFs via `pdftotext -layout` (ou `.txt` direto) → clean → chunk (~900 chars)
   → `STATE_DIR/corpus.json` + `STATE_DIR/embeddings.npy` + `index_meta.json`. **Re-run after
   adding/changing files.** Titles come from `CONTEXT_DIR/titulos.json` (optional), else the
-  filename. Com `RETRIEVAL=bm25` pula os embeddings (não baixa/carrega o ONNX).
+  filename. Com `RETRIEVAL=bm25` pula os embeddings; com `hybrid_api` gera-os pela API
+  (em lotes, sem ONNX).
 - `coletar_arquivo_pessoa.py` — coletor/curador do Arquivo Pessoa (host, opcional): gera
   `contexto/pessoa/*.txt` + `titulos.json` + `manifesto.json` a partir de
   `http://arquivopessoa.net/`. Cache de HTML em `data/pessoa/cache_html`.
@@ -158,9 +164,10 @@ Everything is Python in the repo root. Host runs use the dedicated venv:
 - First launch of a RAG persona downloads the embedding model (~0.2 GB) and indexes the
   context; later starts reuse `data/<persona>` and the cache.
 - `docker-compose.prod.yml` — VPS variant: `image: ghcr.io/kellermanm0ta/persona-bot:${TAG:-latest}`
-  (no `build`), only `bukowski` + `pessoa` + `barramento`, env `RETRIEVAL=bm25` e
-  `INDEX_ON_START=false` (indice `corpus.json` provisionado no host). Sem `model-cache`.
-  See README "Deploy" for CI/CD, GitHub Secrets and VPS setup.
+  (no `build`), only `bukowski` + `pessoa` + `barramento`, env `RETRIEVAL=hybrid_api`,
+  `EMBED_MODEL=baai/bge-m3` e `INDEX_ON_START=false` (indice `corpus.json` +
+  `embeddings.npy` provisionados no host). Sem `model-cache`. See README "Deploy" for
+  CI/CD, GitHub Secrets and VPS setup.
 
 ## Verification (no test suite)
 
@@ -193,6 +200,7 @@ invoked the tool (`call_model ... tools=1`).
   `corpus.json`/`embeddings.npy` (they contain verbatim excerpts).
 - Keep `.secrets/`, `data/`, `.venv/` out of version control; never commit the
   API key or bot tokens.
-- Memória do RAG (medida por processo): híbrido (fastembed/ONNX) ~670–690 MB; `RETRIEVAL=bm25`
-  ~90–120 MB (o `fastembed` não é importado); persona sem RAG ~60 MB. Em hosts pequenos
-  (a VPS tem 1,6 GB, compartilhados com o `agenda`), use `RETRIEVAL=bm25`.
+- Memória do RAG (medida por processo): híbrido local (fastembed/ONNX) ~670–690 MB;
+  `hybrid_api` ~75–105 MB; `bm25` ~90–120 MB; persona sem RAG ~60 MB. Em hosts pequenos
+  (a VPS tem 1,6 GB, compartilhados com o `agenda`), use `hybrid_api` (semântica sem
+  ONNX) ou `bm25`.

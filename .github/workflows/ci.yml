@@ -24,10 +24,18 @@ jobs:
       - name: Smoke test (sem rede)
         run: |
           python - <<'PY'
+          import json
           import os
           import tempfile
+
+          import numpy as np
+
           os.environ["AGENT"] = "bukowski"   # independe de AGENT no ambiente
-          os.environ["STATE_DIR"] = os.path.join(tempfile.mkdtemp(), "state")
+          tmp = tempfile.mkdtemp()
+          os.environ["STATE_DIR"] = tmp
+          os.environ["RETRIEVAL"] = "hybrid_api"
+          os.environ["EMBED_MODEL"] = "baai/bge-m3"
+          os.environ.pop("OPENROUTER_API_KEY", None)
 
           import ferramentas
           import runtime
@@ -40,13 +48,38 @@ jobs:
           assert "vida" in toks and "cidade" in toks, toks
           assert "na" not in toks and "a" not in toks, toks  # stopwords
 
-          # sem corpus no STATE_DIR, a busca degrada para vazio (nao quebra)
-          assert ferramentas.buscar("qualquer coisa", 4) == []
-
           # a persona e lida do disco, sem rede
           agent = runtime.load_agent("bukowski")
           assert agent["prompt"], "prompt da persona vazio"
           assert runtime.bot_name(), "bot_name vazio"
+
+          # sem corpus, a busca degrada para vazio (nao quebra)
+          assert ferramentas.buscar("qualquer coisa", 4) == []
+          assert ferramentas.buscar_hibrido_api("qualquer coisa", 4) == []
+
+          # corpus minimo + vetores do modelo esperado; sem chave, a busca
+          # semantica falha e cai no BM25 (fallback)
+          corpus = {
+              "livros": [{"nome": "T", "arquivo": "t.txt"}],
+              "chunks": [
+                  {"livro": "T", "texto": "a vida e a cidade"},
+                  {"livro": "T", "texto": "outra coisa qualquer"},
+              ],
+              "tf": [{"vida": 1, "cidade": 1}, {"outra": 1, "coisa": 1}],
+              "dl": [2, 2],
+              "df": {"vida": 1, "cidade": 1, "outra": 1, "coisa": 1},
+              "postings": {"vida": [0], "cidade": [0], "outra": [1], "coisa": [1]},
+              "N": 2,
+              "avgdl": 2.0,
+          }
+          with open(os.path.join(tmp, "corpus.json"), "w", encoding="utf-8") as f:
+              json.dump(corpus, f, ensure_ascii=False)
+          np.save(os.path.join(tmp, "embeddings.npy"), np.zeros((2, 4), dtype="float32"))
+          with open(os.path.join(tmp, "index_meta.json"), "w", encoding="utf-8") as f:
+              json.dump({"modelo": "baai/bge-m3", "dim": 4, "n": 2}, f)
+
+          res = ferramentas.buscar_hibrido_api("vida", 4)
+          assert res and res[0]["texto"] == "a vida e a cidade", res
           print("smoke ok")
           PY
 

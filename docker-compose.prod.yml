@@ -11,8 +11,10 @@
 #
 # Rollback: editar TAG no .env (sha anterior) e repetir up -d.
 #
-# RAG em BM25 (`RETRIEVAL=bm25`): sem fastembed/ONNX no runtime, ~90-120 MB por
-# bot. O indice (`corpus.json`) ja vem pronto da VPS; nao ha `model-cache`.
+# RAG hibrido com embeddings via OpenRouter (`RETRIEVAL=hybrid_api`): os trechos
+# vem do `embeddings.npy` local e so a query e vetorizada pela API — sem
+# fastembed/ONNX no runtime (~100 MB por bot). O indice (`corpus.json` +
+# `embeddings.npy`) ja vem pronto da VPS; nao ha `model-cache`.
 name: persona-bots
 
 x-persona: &persona
@@ -36,7 +38,8 @@ services:
     environment:
       AGENT: bukowski
       RAG_ENABLED: "true"
-      RETRIEVAL: bm25
+      RETRIEVAL: hybrid_api
+      EMBED_MODEL: baai/bge-m3
       CONTEXT_DIR: contexto/bukowski
       STATE_DIR: /app/.state
       INDEX_ON_START: "false"
@@ -59,7 +62,8 @@ services:
     environment:
       AGENT: pessoa
       RAG_ENABLED: "true"
-      RETRIEVAL: bm25
+      RETRIEVAL: hybrid_api
+      EMBED_MODEL: baai/bge-m3
       CONTEXT_DIR: contexto/pessoa
       STATE_DIR: /app/.state
       INDEX_ON_START: "false"

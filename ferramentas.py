@@ -204,6 +204,75 @@ def embed_textos(textos: list[str], consulta: bool = False):
     return vecs / normas
 
 
+def _api_client():
+    import os
+
+    from openrouter import OpenRouter
+
+    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError(
+            "OPENROUTER_API_KEY nao definida (veja .secrets/openrouter.env)"
+        )
+    return OpenRouter(api_key=key)
+
+
+def _gerar_com_retry(client, kwargs: dict, tentativas: int = 5):
+    """Chama `/embeddings` com backoff exponencial (o provider as vezes devolve 429)."""
+    import time
+
+    for n in range(tentativas):
+        try:
+            return client.embeddings.generate(**kwargs)
+        except Exception as e:
+            if n == tentativas - 1:
+                raise
+            espera = 2**n
+            log.warning(
+                "embeddings api falhou (%s); tentativa %d/%d em %ds",
+                type(e).__name__,
+                n + 1,
+                tentativas,
+                espera,
+            )
+            time.sleep(espera)
+
+
+def embed_textos_api(textos: list[str], consulta: bool = False):
+    """Vetoriza via OpenRouter `/embeddings` (sem ONNX local).
+
+    Usa o mesmo modelo do indice; a query entra como `search_query` e os
+    trechos como `search_document`. Requer `OPENROUTER_API_KEY`.
+    """
+    import numpy as np
+
+    model = EMBED_MODEL
+    entradas = _com_prefixo(textos, consulta)
+    tipo = "search_query" if consulta else "search_document"
+    client = _api_client()
+    lote = config.EMBED_BATCH or 32
+
+    vetores: list = []
+    for i in range(0, len(entradas), lote):
+        kwargs = {"input": entradas[i : i + lote], "model": model, "input_type": tipo}
+        if config.EMBED_DIM:
+            kwargs["dimensions"] = config.EMBED_DIM
+        resp = _gerar_com_retry(client, kwargs)
+        vetores.extend(item.embedding for item in resp.data)
+
+    vecs = np.asarray(vetores, dtype="float32")
+    normas = np.linalg.norm(vecs, axis=1, keepdims=True)
+    normas[normas == 0] = 1.0
+    return vecs / normas
+
+
+def embed_textos_modo(textos: list[str], consulta: bool = False):
+    """Escolhe o backend de embeddings conforme `RETRIEVAL`."""
+    if config.RETRIEVAL == "hybrid_api":
+        return embed_textos_api(textos, consulta=consulta)
+    return embed_textos(textos, consulta=consulta)
+
+
 def load_embeddings():
     meta = {}
     try:
@@ -276,9 +345,58 @@ def buscar_hibrido(consulta: str, limite: int = 4, k_bm25: int = 20) -> list[dic
     return [{"livro": chunks[cid]["livro"], "texto": chunks[cid]["texto"]} for cid in ids]
 
 
+def buscar_hibrido_api(consulta: str, limite: int = 4, k_bm25: int = 20) -> list[dict]:
+    """BM25 + similaridade semantica com embeddings via OpenRouter.
+
+    A query e vetorizada pela API; os trechos vem do `embeddings.npy` local.
+    Confere o modelo do indice e, sem vetores (ou em caso de falha da API),
+    cai no BM25 puro.
+    """
+    data = load_corpus()
+    chunks = data.get("chunks") or []
+    if not chunks:
+        return []
+
+    bm_ids = [cid for cid, _ in _bm25_cids(consulta, k_bm25)]
+
+    vec_ids: list = []
+    vecs, meta = load_embeddings()
+    modelo = meta.get("modelo")
+    if vecs is not None and modelo and modelo != EMBED_MODEL:
+        log.warning(
+            "embeddings do modelo %r != %r; ignorando vetores (rode indexar.py)",
+            modelo,
+            EMBED_MODEL,
+        )
+        vecs = None
+    if vecs is not None and len(vecs) == len(chunks):
+        try:
+            import numpy as np
+
+            q = embed_textos_api([consulta], consulta=True)[0]
+            sims = np.asarray(vecs) @ q
+            k = min(k_bm25, len(sims))
+            vec_ids = list(np.argsort(-sims)[:k])
+        except Exception as e:
+            log.warning("busca vetorial (api) falhou, usando BM25: %r", e)
+            vec_ids = []
+
+    if not vec_ids:
+        ids = bm_ids[:limite]
+    else:
+        fused = _rrf(bm_ids, vec_ids)
+        ids = [
+            cid
+            for cid, _ in sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[:limite]
+        ]
+
+    return [{"livro": chunks[cid]["livro"], "texto": chunks[cid]["texto"]} for cid in ids]
+
+
 # ---------------------------------------------------------------------------
 # Tool do agente
 # ---------------------------------------------------------------------------
+
 
 def consultar_contexto(args, context=None) -> str:
     """Busca trechos no contexto indexado para embasar a resposta."""
@@ -289,6 +407,8 @@ def consultar_contexto(args, context=None) -> str:
     limite = int(args.get("limite") or 4)
     if config.RETRIEVAL == "bm25":
         trechos = buscar(consulta, limite)
+    elif config.RETRIEVAL == "hybrid_api":
+        trechos = buscar_hibrido_api(consulta, limite)
     else:
         trechos = buscar_hibrido(consulta, limite)
     log.info("consultar_contexto(%r) -> %d trechos", consulta, len(trechos))

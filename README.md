@@ -1,10 +1,10 @@
 # persona-bots
 
 Bot de Telegram **genérico** que conversa em personagem, em pt-BR, opcionalmente
-fundamentado num contexto (PDFs/TXTs) via **RAG híbrido** (BM25 + embeddings locais).
-Cada instância roda **uma persona**; o que muda entre elas é a configuração —
-ninguém precisa mexer no código: troca-se o prompt em `.opencode/agent/<persona>.md`
-e a config no `docker-compose.yml`.
+fundamentado num contexto (PDFs/TXTs) via **RAG híbrido** (BM25 + embeddings). Cada
+instância roda **uma persona**; o que muda entre elas é a configuração — ninguém
+precisa mexer no código: troca-se o prompt em `.opencode/agent/<persona>.md` e a
+config no `docker-compose.yml`.
 
 ## Como funciona
 
@@ -12,14 +12,16 @@ e a config no `docker-compose.yml`.
 telegram_bot.py -> runtime.py -> OpenRouter (openrouter-agent-sdk)
                        |               tool: consultar_contexto (se RAG_ENABLED)
                        v
-                  ferramentas.py  (BM25 + vetores locais, fusão RRF)
+                  ferramentas.py  (BM25 + vetores, fusão RRF; fallback BM25)
                        ^
-                  indexar.py  (pdftotext + fastembed)  <-  CONTEXT_DIR/*.pdf|*.txt
+                  indexar.py  (pdftotext + embeddings)  <-  CONTEXT_DIR/*.pdf|*.txt
 ```
 
 - `config.py` lê tudo do ambiente (`AGENT`, `RAG_ENABLED`, `CONTEXT_DIR`, …).
 - Se `RAG_ENABLED=false`, o bot é só persona (sem corpus, sem tool).
 - `indexar.py` gera o índice BM25 e os embeddings a partir dos PDFs/TXTs de `CONTEXT_DIR`.
+- `RETRIEVAL` escolhe o backend: `bm25` (lexical), `hybrid` (embeddings locais via
+  `fastembed`/ONNX) ou `hybrid_api` (embeddings pela OpenRouter — só a query em runtime).
 
 ## Comunicação entre agentes (ponte)
 
@@ -98,10 +100,12 @@ Pipeline: `push main` → **ci** valida → **publish** publica
 registry. Serviços publicados: **bukowski**, **pessoa** e **barramento** (o hub da
 ponte); buda/ramanujan continuam só no `docker-compose.yml` de desenvolvimento.
 
-RAG em **BM25** (`RETRIEVAL=bm25`): os bots não carregam o `fastembed`/ONNX no runtime
-(~90–120 MB por bot, contra ~690 MB no híbrido), o que cabe nos 1,6 GB da VPS junto do
-`agenda`. O `indexar.py` pula os embeddings quando `RETRIEVAL=bm25`, e o índice
-(`corpus.json`, sem `.npy`) é provisionado na VPS.
+RAG em **híbrido com embeddings via API** (`RETRIEVAL=hybrid_api`): os trechos vêm do
+`embeddings.npy` local e só a **query** é vetorizada pela OpenRouter — sem
+`fastembed`/ONNX no runtime (~100 MB por bot, contra ~690 MB no híbrido local). O
+modelo é o `EMBED_MODEL` (default `baai/bge-m3`); o `indexar.py` gera os vetores por
+API, então o índice (`corpus.json` + `embeddings.npy` + `index_meta.json`) é
+provisionado na VPS. Se a API falhar, a busca cai no BM25.
 
 Segredos (GitHub → Settings → Secrets and variables → Actions):
 
@@ -116,19 +120,30 @@ Segredos (GitHub → Settings → Secrets and variables → Actions):
 ### Setup da VPS (uma vez)
 
 Pré-requisitos: usuário no grupo `docker`, Docker Engine + compose v2, chave SSH. O
-`contexto/` (copyright) e o `corpus.json` **não** vão pela CI — copie do host uma vez:
+`contexto/` (copyright) e o índice **não** vão pela CI — copie do host uma vez:
 
 ```bash
 ssh inter-server-vps 'mkdir -p ~/persona-bots/{data/bukowski,data/pessoa,data/barramento,.secrets/bukowski,.secrets/pessoa,contexto/{bukowski,pessoa}}'
 
 rsync -a contexto/bukowski/ inter-server-vps:~/persona-bots/contexto/bukowski/
 rsync -a contexto/pessoa/   inter-server-vps:~/persona-bots/contexto/pessoa/
-scp data/bukowski/corpus.json inter-server-vps:~/persona-bots/data/bukowski/
-scp data/pessoa/corpus.json   inter-server-vps:~/persona-bots/data/pessoa/
+scp data/bukowski/{corpus.json,embeddings.npy,index_meta.json} \
+    inter-server-vps:~/persona-bots/data/bukowski/
+scp data/pessoa/{corpus.json,embeddings.npy,index_meta.json} \
+    inter-server-vps:~/persona-bots/data/pessoa/
 ```
 
-Para regenerar o `corpus.json` localmente (sem embeddings):
-`RETRIEVAL=bm25 ./.venv/bin/python indexar.py`.
+Para regenerar o índice localmente (sem ONNX; usa a API e custa ~centavos):
+
+```bash
+RETRIEVAL=hybrid_api EMBED_MODEL=baai/bge-m3 \
+  AGENT=bukowski STATE_DIR=data/bukowski CONTEXT_DIR=contexto/bukowski \
+  ./.venv/bin/python indexar.py
+```
+
+Ao trocar de `EMBED_MODEL`, **re-indexe e reenvie** os dois arquivos — vetores de
+modelos diferentes não são comparáveis (o runtime avisa e cai no BM25 se
+`index_meta.json` não bater).
 
 Primeiro deploy: rode o pipeline. Se o `pull` na VPS falhar com `401`, torne o pacote
 público (GitHub → Packages → persona-bot → Package settings).
@@ -171,10 +186,11 @@ nos bots; sem o hub, eles respondem direto.
 
 ## Configuração (environment)
 
-`AGENT`, `RAG_ENABLED`, `CONTEXT_DIR`, `STATE_DIR`, `RETRIEVAL` (`hybrid`|`bm25`),
-`EMBED_MODEL`, `OPENROUTER_MODEL`, `MAX_HISTORY`, `INDEX_ON_START`,
-`BARRAMENTO_ENABLED`, `BARRAMENTO_URL`, `BARRAMENTO_CHAT_IDS` — detalhes e defaults
-em `AGENTS.md`.
+`AGENT`, `RAG_ENABLED`, `CONTEXT_DIR`, `STATE_DIR`, `RETRIEVAL`
+(`bm25`|`hybrid`|`hybrid_api`), `EMBED_MODEL` (fastembed em `hybrid`, id OpenRouter em
+`hybrid_api`), `EMBED_BATCH`, `EMBED_DIM`, `OPENROUTER_MODEL`, `MAX_HISTORY`,
+`INDEX_ON_START`, `BARRAMENTO_ENABLED`, `BARRAMENTO_URL`, `BARRAMENTO_CHAT_IDS` —
+detalhes e defaults em `AGENTS.md`.
 
 ## Aviso
 

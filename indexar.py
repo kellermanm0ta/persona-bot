@@ -206,7 +206,7 @@ def gerar_embeddings(chunks: list) -> None:
     textos = [c["texto"] for c in chunks]
     t0 = time.time()
     try:
-        vecs = ferramentas.embed_textos(textos, consulta=False)
+        vecs = ferramentas.embed_textos_modo(textos, consulta=False)
     except Exception as e:
         log.warning("embeddings indisponiveis (%r); indice BM25 segue valido", e)
         print("embeddings: falhou (BM25 continua funcionando)")
